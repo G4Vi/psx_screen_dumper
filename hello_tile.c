@@ -247,24 +247,45 @@ void dump_data(const void *data, size_t size)
     // draw and display 
     draw_dataframe();
     display_data();
+    
+    //const uint8_t *buf = (const uint8_t*)(data);
+    // current frame index, last frame index, data size in bytes, checksum
+    const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
+    const uint16_t framedatasize = (UCNT/8) - nondatasize;
+    uint16_t fullframecnt = (size / framedatasize);
+    if(size % framedatasize) {
+        fullframecnt += 1;
+    }
+    uint16_t lastframeindex = fullframecnt-1;
+     const uint8_t *buf = ((const uint8_t*)(data));
+    for(uint16_t frameindex = 0; frameindex <= lastframeindex; frameindex++) {
+        const uint16_t datanow = (frameindex == lastframeindex) ? size : framedatasize;              
 
-    const uint8_t *buf = (const uint8_t*)(data);
-    const uint16_t framedata = (UCNT/8) - 6;
-    for(int i = 0; i < size; i += framedata) {
-        const int dataleft = size - i;
-        const uint16_t datanow = dataleft > framedata ? framedata : dataleft;
         // this can be an unaligned load, is this a problem on real hw?
-        const uint32_t checksum = crc32(&buf[i], datanow);        
+        const uint32_t checksum = crc32_frame(frameindex, lastframeindex, datanow, buf);        
         
-        // write the data size in LE
-        set_byte(datanow, 0);
-        set_byte(datanow >> 8, 8);
+        int bitindex = 0;
+        // write the frame index in LE
+        set_byte(frameindex, bitindex);
+        bitindex += 8;
+        set_byte(frameindex >> 8, bitindex);
+        bitindex += 8;
 
+        // write the last frameindex in LE
+        set_byte(lastframeindex, bitindex);
+        bitindex += 8;
+        set_byte(lastframeindex >> 8, bitindex);
+        bitindex += 8;
+
+        // write the data size in LE
+        set_byte(datanow, bitindex);
+        bitindex += 8;
+        set_byte(datanow >> 8, bitindex);
+        bitindex += 8;
         
-        // write the data
-        int bitindex = 16;
-        for(int j = i; j < (i+datanow); j++) {
-            set_byte(buf[j], bitindex);
+        // write the data        
+        for(int i = 0; i < datanow; i++) {
+            set_byte(buf[i], bitindex);
             bitindex += 8;
         }        
 
@@ -272,11 +293,15 @@ void dump_data(const void *data, size_t size)
         set_byte((uint8_t)(checksum), UCNT-32);
         set_byte((uint8_t)(checksum >> 8), UCNT-24);
         set_byte((uint8_t)(checksum >> 16), UCNT-16);
-        set_byte((uint8_t)(checksum >> 24), UCNT-8);      
-        break;
-    }
-    draw_dataframe();
-    display_data();
+        set_byte((uint8_t)(checksum >> 24), UCNT-8);
+
+        draw_dataframe();
+        display_data();      
+        delay_ds(5);
+
+        size -= datanow;  
+        buf += framedatasize;
+    }    
 }
 
 void dump_save(const char *savename) {
