@@ -1,6 +1,7 @@
 //#include <sys/types.h>
 //#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <libgte.h>
 #include <libetc.h>
@@ -262,7 +263,9 @@ void dump_data(const void *data, size_t size)
         const uint16_t datanow = (frameindex == lastframeindex) ? size : framedatasize;              
 
         // this can be an unaligned load, is this a problem on real hw?
-        const uint32_t checksum = crc32_frame(frameindex, lastframeindex, datanow, buf);        
+        const uint32_t checksum = crc32_frame(frameindex, lastframeindex, datanow, buf);
+
+        printf("dumping frame %u of %u size %u chk 0x%X\n", frameindex, lastframeindex, datanow, checksum);        
         
         int bitindex = 0;
         // write the frame index in LE
