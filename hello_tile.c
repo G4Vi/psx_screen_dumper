@@ -83,6 +83,11 @@ void init(void)
     PutDrawEnv(&draw[db]);
     
     FntLoad(960, 0);
+    static RECT rect;
+    setRECT(&rect, 960, 128, 2, 1);
+    static uint32_t thedata[16];
+    thedata[0] = 0x7F200000;
+    LoadImage(&rect, &thedata);
     FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );    
 }
 
@@ -265,7 +270,7 @@ void dump_data(const void *data, size_t size)
         // this can be an unaligned load, is this a problem on real hw?
         const uint32_t checksum = crc32_frame(frameindex, lastframeindex, datanow, buf);
 
-        printf("dumping frame %u of %u size %u chk 0x%X\n", frameindex, lastframeindex, datanow, checksum);        
+        //printf("dumping frame %u of %u size %u chk 0x%X\n", frameindex, lastframeindex, datanow, checksum);        
         
         int bitindex = 0;
         // write the frame index in LE
