@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+
 #include <libgte.h>
 #include <libetc.h>
 #include <libgpu.h>
@@ -71,8 +74,8 @@ void init(void)
         disp[1].screen.y += 8;
     }
         
-    setRGB0(&draw[0], 255, 255, 255);
-    setRGB0(&draw[1], 255, 255, 255);
+    setRGB0(&draw[0], 50, 50, 50);
+    setRGB0(&draw[1], 50, 50, 50);
     
     draw[0].isbg = 1;
     draw[1].isbg = 1;
@@ -83,11 +86,11 @@ void init(void)
     PutDrawEnv(&draw[db]);
     
     FntLoad(960, 0);
-    static RECT rect;
+    /*static RECT rect;
     setRECT(&rect, 960, 128, 2, 1);
-    static uint32_t thedata[16];
-    thedata[0] = 0x7F200000;
-    LoadImage(&rect, &thedata);
+    static uint32_t thedata;
+    thedata = 0x7F200000;
+    LoadImage(&rect, &thedata);*/
     FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );    
 }
 
@@ -134,6 +137,8 @@ typedef struct _PADTYPE
 } PADTYPE;
 
 typedef enum {
+    BTN_UP       = 16,
+    BTN_DOWN     = 64,
     BTN_TRIANGLE = 4096,
     BTN_CIRCLE   = 8192,
     BTN_CROSS    = 16384
@@ -159,6 +164,22 @@ void wait_for_pad(const BTN btn)
     }
 }
 
+/* all passed in must be pressed for true */
+uint16_t buttons_pressed(const BTN btn)
+{
+    // controller on port 1 connected
+    volatile PADTYPE *pad = (PADTYPE *)padbuff[0];
+    if( pad->stat == 0 )
+    {
+        if( ( pad->type == 0x4 ) || 
+            ( pad->type == 0x5 ) || 
+            ( pad->type == 0x7 ) ) {
+            return (!(pad->btn & btn));            
+        }                                        
+    }
+    return 0;
+}
+
 void delay_ds(uint32_t deciseconds) {
 	uint32_t frames = deciseconds * 6;
 	while (frames) {
@@ -174,7 +195,7 @@ void output_status(const char *message) {
 }
 
 void draw_dataframe(void)
-{
+{    
     ClearOTagR(ot[db], OTLEN);
     addPrim(ot[db], &dataframe[0]);
     addPrim(ot[db], &dataframe[1]);
@@ -206,6 +227,10 @@ void set_byte(uint8_t value, int pos)
 void dump_data(const void *data, size_t size)
 {
     // setup frame
+    DrawSync(0);
+    setRGB0(&draw[0], 255, 255, 255);
+    setRGB0(&draw[1], 255, 255, 255);
+
     //  top
     setTile(&dataframe[0]);
     setXY0(&dataframe[0], STARTX, STARTY);
@@ -309,10 +334,15 @@ void dump_data(const void *data, size_t size)
 
         size -= datanow;  
         buf += framedatasize;
-    }    
+    }
+
+    setRGB0(&draw[0], 50, 50, 50);
+    setRGB0(&draw[1], 50, 50, 50);
+    display_data();    
 }
 
 void dump_save(const char *savename) {
+    printf("opening file %s\n", savename);
     output_status("Opening file");
     int32_t fd = open((char*)savename, 0x1);
     if(fd < 0) {
@@ -332,28 +362,199 @@ void dump_save(const char *savename) {
     close(fd);
     output_status("File read success");
     dump_data(buf, sizeof(buf));
-    while(1);
+}
+
+typedef enum {
+    SPT_SELECT_DEVICE,
+    SPT_MCS_LIST,
+    SPT_DUMP
+} SCREEN_PAGE_TYPE;
+
+typedef struct {
+    char label[20];
+    void *extradata;
+} MENUITEM;
+
+typedef struct {
+    uint16_t count;
+    uint16_t index;
+    void(*handle)(void);
+    SCREEN_PAGE_TYPE back;
+    bool loaded;
+    MENUITEM items[15];
+} MENU;
+
+typedef struct {
+    void (*show)(void);
+    void (*on_vsync)(void);
+
+    union {
+        MENU menu;
+    };
+
+} SCREEN_PAGE;
+
+typedef struct {
+    SCREEN_PAGE_TYPE current;
+    SCREEN_PAGE_TYPE last;
+
+    SCREEN_PAGE page_select_device;
+    SCREEN_PAGE page_mcs_list;
+    SCREEN_PAGE page_dump;
+
+    SCREEN_PAGE *curpage;
+} SCREEN_PAGES;
+
+
+SCREEN_PAGES sp;
+
+void screen_page_change(const SCREEN_PAGE_TYPE new)
+{
+    sp.current = new;
+    switch(new)
+    {
+        case SPT_SELECT_DEVICE:
+        sp.curpage = &sp.page_select_device;        
+        break;
+        case SPT_MCS_LIST:
+        sp.curpage = &sp.page_mcs_list;
+        break;
+        case SPT_DUMP:
+        sp.curpage = &sp.page_dump;
+        break;
+    }
+    sp.curpage->show();
+}
+
+
+
+void menu_show(void)
+{
+    MENU *menu = &sp.curpage->menu;
+    for(int i = 0; i < menu->count; i++)
+    {
+        FntPrint("%s\n", menu->items[i].label);
+    }
+    FntFlush(-1);
+    display_data();
+}
+
+void menu_on_vsync(void)
+{
+    MENU *menu = &sp.curpage->menu;
+    if(buttons_pressed(BTN_CROSS))
+    {
+        menu->handle();
+    }
+    else if(buttons_pressed(BTN_TRIANGLE))
+    {
+        if(menu->back != sp.current)
+        {
+            screen_page_change(menu->back);
+        }
+    }
+    else if(buttons_pressed(BTN_UP))
+    {
+        if(menu->index > 0)
+        {
+            menu->index--;
+            menu_show();
+        }
+    }
+    else if(buttons_pressed(BTN_DOWN))
+    {
+        if(menu->index < (menu->count-1))
+        {
+            menu->index++;
+            menu_show();
+        }
+    }   
+}
+
+void mcs_list(void)
+{
+    if(sp.current == SPT_SELECT_DEVICE)
+    {
+        sp.curpage->menu.loaded = false;
+    }
+    screen_page_change(SPT_MCS_LIST);        
+}
+
+void mcs_list_on_vsync(void)
+{
+    if(!sp.curpage->menu.loaded)
+    {
+        sp.page_mcs_list.menu.loaded = true;
+
+        InitCARD(1);
+        StartCARD();
+        _bu_init();
+
+        struct DIRENTRY file;
+        if(firstfile("bu00:*", &file) == NULL)
+        {
+            output_status("firstfile failed");
+            return;
+        }
+        int i = 0;
+        do {
+            file.name[19] = '\0';
+            printf("file %s size %u\n", file.name, file.size);
+            sprintf(sp.page_mcs_list.menu.items[i].label, "%s", file.name);
+            sp.page_mcs_list.menu.items[i].extradata = "bu00:";
+            i++;
+        } while(nextfile(&file) != NULL);
+        sp.page_mcs_list.menu.count = i;              
+        menu_show();
+    }
+    else
+    {
+        menu_on_vsync();
+    }
+}
+
+
+void handle_dump_mcs(void)
+{
+    const MENUITEM *item = &sp.page_mcs_list.menu.items[sp.page_mcs_list.menu.index];
+    char filename[25];
+    sprintf(filename, "%s%s", (char*)item->extradata, item->label);
+    dump_save(filename);
+    screen_page_change(SPT_MCS_LIST);
 }
 
 int main(void)
 {   
+    sp.page_select_device.show = &menu_show;
+    sp.page_select_device.on_vsync = &menu_on_vsync;
+    sp.page_select_device.menu.count = 1;
+    sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
+    sp.page_select_device.menu.handle = &mcs_list;
+    strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
+    /*sp.page_select_device.menu.items[0].label[0] = 'A';
+    sp.page_select_device.menu.items[0].label[1] = 'B';
+    sp.page_select_device.menu.items[0].label[2] = '\0';*/
+
+    sp.page_mcs_list.show = &menu_show;
+    sp.page_mcs_list.on_vsync = &mcs_list_on_vsync;
+    sp.page_mcs_list.menu.count = 0;
+    sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
+    sp.page_mcs_list.menu.handle = &handle_dump_mcs;
+    sp.page_mcs_list.menu.loaded = false;
+    //sp.page_mcs_list.menu.items[0].label = "bu00:BASLUS-01384DRACULA";
+
     init();
     InitPAD( padbuff[0], 34, padbuff[1], 34 );
     padbuff[0][0] = padbuff[0][1] = 0xff;
     padbuff[1][0] = padbuff[1][1] = 0xff;
     StartPAD();
 
+    screen_page_change(SPT_SELECT_DEVICE);
     while(1)
     {
-        //draw_data();
-        FntPrint("Press X to start");
-        FntFlush(-1);
-        display_data();
-        wait_for_pad(BTN_CROSS);
-        InitCARD(1);
-        StartCARD();
-        _bu_init();
-        dump_save("bu00:BASLUS-01384DRACULA");
+        DrawSync(0);
+        VSync(0);  
+        sp.curpage->on_vsync();  
     }
 
     return 0;
