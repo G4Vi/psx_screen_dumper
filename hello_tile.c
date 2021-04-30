@@ -53,6 +53,7 @@ DRAWENV draw[2];
 u_long ot[2][OTLEN];          // double ordering table of length 8 * 32 = 256 bits / 32 bytes
 
 short db = 0;                 // index of which buffer is used, values 0, 1
+bool swap = true;
 
 TILE dataframe[4];
 TILE datablocks[2][UCNT];
@@ -191,7 +192,7 @@ void delay_ds(uint32_t deciseconds) {
 void output_status(const char *message) {
     FntPrint(message);
     FntFlush(-1);
-    display_data();
+    swap = true;
 }
 
 void draw_dataframe(void)
@@ -436,7 +437,7 @@ void menu_show(void)
         FntPrint("%s\n", menu->items[i].label);
     }
     FntFlush(-1);
-    display_data();
+    swap = true;
 }
 
 void menu_on_vsync(void)
@@ -523,6 +524,8 @@ void handle_dump_mcs(void)
     screen_page_change(SPT_MCS_LIST);
 }
 
+/*char pribuff[2][32768]; // Primitive buffer
+char *nextpri;          // Next primitive pointer*/
 int main(void)
 {   
     sp.page_select_device.show = &menu_show;
@@ -548,13 +551,38 @@ int main(void)
     padbuff[0][0] = padbuff[0][1] = 0xff;
     padbuff[1][0] = padbuff[1][1] = 0xff;
     StartPAD();
-
+    
     screen_page_change(SPT_SELECT_DEVICE);
     while(1)
-    {
+    {         
         DrawSync(0);
-        VSync(0);  
-        sp.curpage->on_vsync();  
+        VSync(0);
+        if(swap)
+        {
+            swap = false;
+            db = !db;
+            PutDispEnv(&disp[db]);
+            PutDrawEnv(&draw[db]);            
+        }
+        sp.curpage->on_vsync();
+
+
+        /*TILE *tile;
+        ClearOTagR(ot[db], OTLEN);
+        tile = (TILE*)nextpri;      // Cast next primitive
+        setTile(tile);              // Initialize the primitive (very important)
+        setXY0(tile, 32, 32);       // Set primitive (x,y) position
+        setWH(tile, 64, 64);        // Set primitive size
+        setRGB0(tile, 255, 255, 0); // Set color yellow
+        addPrim(ot[db], tile);      // Add primitive to the ordering table        
+        nextpri += sizeof(TILE);    // Advance the next primitive pointer
+        DrawSync(0);
+        VSync(0);
+        PutDispEnv(&disp[db]);
+        PutDrawEnv(&draw[db]);
+        DrawOTag(ot[db] + OTLEN - 1);
+        db = !db; 
+        nextpri = pribuff[db];*/
     }
 
     return 0;
