@@ -53,7 +53,6 @@ DRAWENV draw[2];
 u_long ot[2][OTLEN];          // double ordering table of length 8 * 32 = 256 bits / 32 bytes
 
 short db = 0;                 // index of which buffer is used, values 0, 1
-bool swap = true;
 
 TILE dataframe[4];
 TILE datablocks[2][UCNT];
@@ -192,7 +191,6 @@ void delay_ds(uint32_t deciseconds) {
 void output_status(const char *message) {
     FntPrint(message);
     FntFlush(-1);
-    swap = true;
 }
 
 void draw_dataframe(void)
@@ -339,7 +337,9 @@ void dump_data(const void *data, size_t size)
 
     setRGB0(&draw[0], 50, 50, 50);
     setRGB0(&draw[1], 50, 50, 50);
-    display_data();    
+    ClearOTagR(ot[db], OTLEN);
+    display_data();
+    ClearOTagR(ot[db], OTLEN); 
 }
 
 void dump_save(const char *savename) {
@@ -385,12 +385,30 @@ typedef struct {
     MENUITEM items[15];
 } MENU;
 
+
+typedef enum {
+    DUMPST_FILE_OPEN,
+    DUMPST_FILE_SLEEP,
+    DUMPST_FILE_READ,
+    DUMPST_DUMP
+} DUMPSTATE;
+
+typedef struct {
+    DUMPSTATE state;
+    int fd;
+    int sleep_frames;
+    uint32_t bytes_left; 
+    char filename[25];
+    const char *statustext;
+} DUMP;
+
 typedef struct {
     void (*show)(void);
     void (*on_vsync)(void);
 
     union {
         MENU menu;
+        DUMP dump;
     };
 
 } SCREEN_PAGE;
@@ -437,7 +455,6 @@ void menu_show(void)
         FntPrint("%s\n", menu->items[i].label);
     }
     FntFlush(-1);
-    swap = true;
 }
 
 void menu_on_vsync(void)
@@ -446,38 +463,36 @@ void menu_on_vsync(void)
     if(buttons_pressed(BTN_CROSS))
     {
         menu->handle();
+        return;
     }
     else if(buttons_pressed(BTN_TRIANGLE))
     {
         if(menu->back != sp.current)
         {
             screen_page_change(menu->back);
+            return;
         }
     }
     else if(buttons_pressed(BTN_UP))
     {
         if(menu->index > 0)
         {
-            menu->index--;
-            menu_show();
+            menu->index--;           
         }
     }
     else if(buttons_pressed(BTN_DOWN))
     {
         if(menu->index < (menu->count-1))
         {
-            menu->index++;
-            menu_show();
+            menu->index++;            
         }
-    }   
+    }
+    menu_show();   
 }
 
 void mcs_list(void)
 {
-    if(sp.current == SPT_SELECT_DEVICE)
-    {
-        sp.curpage->menu.loaded = false;
-    }
+    sp.page_mcs_list.menu.loaded = false;
     screen_page_change(SPT_MCS_LIST);        
 }
 
@@ -505,27 +520,80 @@ void mcs_list_on_vsync(void)
             sp.page_mcs_list.menu.items[i].extradata = "bu00:";
             i++;
         } while(nextfile(&file) != NULL);
-        sp.page_mcs_list.menu.count = i;              
-        menu_show();
+        sp.page_mcs_list.menu.count = i;        
     }
-    else
-    {
-        menu_on_vsync();
-    }
+    menu_on_vsync();    
 }
 
 
 void handle_dump_mcs(void)
 {
     const MENUITEM *item = &sp.page_mcs_list.menu.items[sp.page_mcs_list.menu.index];
-    char filename[25];
-    sprintf(filename, "%s%s", (char*)item->extradata, item->label);
-    dump_save(filename);
+    sprintf(sp.page_dump.dump.filename, "%s%s", (char*)item->extradata, item->label);
+    sp.page_dump.dump.bytes_left = 0x2000; //todo set to actual size
+    screen_page_change(SPT_DUMP);
+}
+
+void dump_show(void) {
+    sp.page_dump.dump.state = DUMPST_FILE_OPEN;
+    sp.page_dump.dump.statustext = "Opening file";
+    output_status(sp.page_dump.dump.statustext);
+    /*dump_save(sp.page_dump.dump.filename);
+    screen_page_change(SPT_MCS_LIST);*/
+}
+
+
+void dump_vsync(void) {
+    DUMP *dump = &sp.page_dump.dump;
+    uint8_t buf[0x2000];
+    int32_t res;
+    switch(dump->state)
+    {
+        case DUMPST_FILE_OPEN:
+        dump->fd = open(dump->filename, 0x1);
+        if(dump->fd < 0) {
+            printf("Failed to open file\n");
+            goto DUMP_VSYNC_EXIT;
+        }
+        dump->sleep_frames = 6;
+        dump->state = DUMPST_FILE_SLEEP;
+        break;
+
+        case DUMPST_FILE_SLEEP:
+        dump->sleep_frames--;
+        if(dump->sleep_frames > 0) break;        
+        dump->statustext = "Starting file dump";
+        dump->state = DUMPST_FILE_READ;
+        break;
+
+        /* todo callback is better idea*/
+        case DUMPST_FILE_READ:        
+        res = read(dump->fd, buf, sizeof(buf));
+        if(res != (int32_t)sizeof(buf)) {
+            printf("File read failed\n");
+            goto DUMP_VSYNC_FILE_EXIT;
+        }      
+        /* fallthrough */
+        case DUMPST_DUMP:
+        dump->statustext = NULL;     
+        dump_data(buf, sizeof(buf));
+        goto DUMP_VSYNC_FILE_EXIT;
+        break;
+    }
+    if(dump->statustext != NULL)
+    {
+        output_status(dump->statustext);
+    }
+    return;
+
+    DUMP_VSYNC_FILE_EXIT:
+    close(dump->fd);
+    DUMP_VSYNC_EXIT:
     screen_page_change(SPT_MCS_LIST);
 }
 
-/*char pribuff[2][32768]; // Primitive buffer
-char *nextpri;          // Next primitive pointer*/
+//char pribuff[2][32768]; // Primitive buffer
+//char *nextpri;          // Next primitive pointer
 int main(void)
 {   
     sp.page_select_device.show = &menu_show;
@@ -534,9 +602,6 @@ int main(void)
     sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
     sp.page_select_device.menu.handle = &mcs_list;
     strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
-    /*sp.page_select_device.menu.items[0].label[0] = 'A';
-    sp.page_select_device.menu.items[0].label[1] = 'B';
-    sp.page_select_device.menu.items[0].label[2] = '\0';*/
 
     sp.page_mcs_list.show = &menu_show;
     sp.page_mcs_list.on_vsync = &mcs_list_on_vsync;
@@ -544,7 +609,9 @@ int main(void)
     sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
     sp.page_mcs_list.menu.handle = &handle_dump_mcs;
     sp.page_mcs_list.menu.loaded = false;
-    //sp.page_mcs_list.menu.items[0].label = "bu00:BASLUS-01384DRACULA";
+    
+    sp.page_dump.show = &dump_show;    
+    sp.page_dump.on_vsync= &dump_vsync;
 
     init();
     InitPAD( padbuff[0], 34, padbuff[1], 34 );
@@ -553,18 +620,38 @@ int main(void)
     StartPAD();
     
     screen_page_change(SPT_SELECT_DEVICE);
+
+    /*TILE *tile;
+    uint8_t red = 255;
+    for(int i = 0; i < 2; i++)
+    {
+        nextpri = pribuff[i];
+        ClearOTagR(ot[i], OTLEN);
+        tile = (TILE*)nextpri;      // Cast next primitive
+        setTile(tile);              // Initialize the primitive (very important)
+        setXY0(tile, 32, 32);       // Set primitive (x,y) position
+        setWH(tile, 64, 64);        // Set primitive size
+        setRGB0(tile, red*i, 255, 0); // Set color yellow
+        addPrim(ot[i], tile);      // Add primitive to the ordering table        
+        nextpri += sizeof(TILE);    // Advance the next primitive pointer
+    }*/
+
+    for(int i = 0; i < 2; i++)
+    {
+        ClearOTagR(ot[i], OTLEN);
+    }
+    
     while(1)
-    {         
-        DrawSync(0);
-        VSync(0);
-        if(swap)
-        {
-            swap = false;
-            db = !db;
-            PutDispEnv(&disp[db]);
-            PutDrawEnv(&draw[db]);            
-        }
+    {   
         sp.curpage->on_vsync();
+        DrawSync(0);
+        VSync(0);         
+        PutDispEnv(&disp[db]);
+        PutDrawEnv(&draw[db]);
+        DrawOTag(ot[db] + OTLEN - 1);
+        db = !db;
+        
+        
 
 
         /*TILE *tile;
@@ -582,7 +669,34 @@ int main(void)
         PutDrawEnv(&draw[db]);
         DrawOTag(ot[db] + OTLEN - 1);
         db = !db; 
-        nextpri = pribuff[db];*/
+        nextpri = pribuff[db];
+        while(1);*/
+
+        /*
+        TILE *tile;
+        ClearOTagR(ot[db], OTLEN);
+        tile = (TILE*)nextpri;      // Cast next primitive
+        setTile(tile);              // Initialize the primitive (very important)
+        setXY0(tile, 32, 32);       // Set primitive (x,y) position
+        setWH(tile, 64, 64);        // Set primitive size
+        setRGB0(tile, 255, 255, 0); // Set color yellow
+        addPrim(ot[db], tile);      // Add primitive to the ordering table        
+        nextpri += sizeof(TILE);    // Advance the next primitive pointer
+        DrawOTag(ot[db] + OTLEN - 1);
+        DrawSync(0);
+        VSync(0);
+        db = !db;
+        PutDispEnv(&disp[db]);
+        PutDrawEnv(&draw[db]);
+        */
+
+
+        /*DrawOTag(ot[db] + OTLEN - 1);
+        DrawSync(0);
+        VSync(0);
+        db = !db;
+        PutDispEnv(&disp[db]);
+        PutDrawEnv(&draw[db]);*/              
     }
 
     return 0;
