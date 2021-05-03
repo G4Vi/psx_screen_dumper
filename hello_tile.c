@@ -91,7 +91,51 @@ void init(void)
     static uint32_t thedata;
     thedata = 0x7F200000;
     LoadImage(&rect, &thedata);*/
-    FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );    
+    FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );
+
+    //  top
+    setTile(&dataframe[0]);
+    setXY0(&dataframe[0], STARTX, STARTY);
+    setWH(&dataframe[0], PIXW, BLOCKSIZE);
+    setRGB0(&dataframe[0], 0, 0, 0);
+
+    // bottom
+    setTile(&dataframe[1]);
+    setXY0(&dataframe[1], STARTX, ENDY-BLOCKSIZE);
+    setWH(&dataframe[1], PIXW, BLOCKSIZE);
+    setRGB0(&dataframe[1], 0, 0, 0);
+
+    // left
+    setTile(&dataframe[2]);
+    setXY0(&dataframe[2], STARTX, STARTY+BLOCKSIZE);
+    setWH(&dataframe[2], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
+    setRGB0(&dataframe[2], 0, 0, 0);
+
+    // right
+    setTile(&dataframe[3]);
+    setXY0(&dataframe[3], ENDX-BLOCKSIZE, STARTY+BLOCKSIZE);
+    setWH(&dataframe[3], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
+    setRGB0(&dataframe[3], 0, 0, 0);
+
+    // setup tiles
+    for(int i = 0; i < 2; i++)
+    {
+        int x = USTARTX;
+        int y = USTARTY;
+        for(int j = 0; j < UCNT; j++)
+        {
+            setTile(&datablocks[i][j]);
+            setXY0(&datablocks[i][j], x, y);
+            setWH(&datablocks[i][j], BLOCKSIZE, BLOCKSIZE);
+            setRGB0(&datablocks[i][j], 255, 255, 255);
+            x += BLOCKSIZE;
+            if(x == UENDX)
+            {
+                x = USTARTX;
+                y += BLOCKSIZE;
+            }
+        }
+    }    
 }
 
 /*
@@ -396,7 +440,7 @@ typedef struct {
 typedef enum {
     DUMPST_FILE_OPEN,
     DUMPST_FILE_SLEEP,
-    DUMPST_FILE_READ,
+    DUMPST_FILE_START,
     DUMPST_DUMP
 } DUMPSTATE;
 
@@ -630,8 +674,7 @@ bool do_dump(DUMP *dump)
         bitindex += 8;
     }
 
-    // draw a frame of data
-    ClearOTagR(ot[db], OTLEN);
+    // draw a frame of data    
     addPrim(ot[db], &dataframe[0]);
     addPrim(ot[db], &dataframe[1]);
     addPrim(ot[db], &dataframe[2]);
@@ -648,6 +691,9 @@ bool do_dump(DUMP *dump)
 
 bool dump_start(DUMP *dump)
 {
+    dump->state = DUMPST_DUMP;
+    dump->statustext = NULL;  
+
     const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
     const uint16_t framedatasize = (UCNT/8) - nondatasize;
 
@@ -662,6 +708,8 @@ bool dump_start(DUMP *dump)
     dump->startdata[2] = lastframeindex;
     dump->startdata[3] = lastframeindex >> 8;
 
+    setRGB0(&draw[0], 255, 255, 255);
+    setRGB0(&draw[1], 255, 255, 255);
     return do_dump(dump);
 }
 
@@ -685,25 +733,25 @@ void dump_vsync(void) {
         dump->sleep_frames--;
         if(dump->sleep_frames > 0) break;        
         dump->statustext = "Starting file dump";
+        dump->state = DUMPST_FILE_START;
+        break;
+
+        case DUMPST_FILE_START:
         dump->buf = (const uint8_t*)&Dump_file_buf;
         dump->bufsize = sizeof(Dump_file_buf);
         dump->readhead = dump->buf;
-        dump->readend = dump->readhead;
-        dump->state = DUMPST_FILE_READ;
+        dump->readend = dump->readhead;        
+        if(!dump_start(dump))
+        {
+            goto DUMP_VSYNC_FILE_EXIT;
+        }
         break;
 
-        /* todo callback is better idea*/
-        case DUMPST_FILE_READ:        
-        res = read(dump->fd, (void*)dump->buf, dump->bufsize);
-        if(res != (int32_t)dump->bufsize) {
-            printf("File read failed\n");
-            goto DUMP_VSYNC_FILE_EXIT;
-        }      
-        /* fallthrough */
         case DUMPST_DUMP:
-        dump->statustext = NULL;     
-        dump_data(dump->buf, dump->bufsize);
-        goto DUMP_VSYNC_FILE_EXIT;
+        if(!do_dump(dump))
+        {
+            goto DUMP_VSYNC_FILE_EXIT;
+        }       
         break;
     }
     if(dump->statustext != NULL)
@@ -713,8 +761,10 @@ void dump_vsync(void) {
     return;
 
     DUMP_VSYNC_FILE_EXIT:
-    close(dump->fd);
+    close(dump->fd);    
     DUMP_VSYNC_EXIT:
+    setRGB0(&draw[0], 50, 50, 50);
+    setRGB0(&draw[1], 50, 50, 50);
     screen_page_change(SPT_MCS_LIST);
 }
 
@@ -769,6 +819,7 @@ int main(void)
     
     while(1)
     {   
+        ClearOTagR(ot[db], OTLEN);
         sp.curpage->on_vsync();
         DrawSync(0);
         VSync(0);         
