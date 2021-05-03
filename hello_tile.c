@@ -43,6 +43,10 @@
 #define UCNTW ((UENDX - USTARTX)/BLOCKSIZE)
 #define UCNTH ((UENDY - USTARTY)/BLOCKSIZE)
 #define UCNT (UCNTW * UCNTH)
+
+#define FRAME_HEADER_SIZE (sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t))
+#define FRAME_FOOTER_SIZE (sizeof(uint32_t))
+#define FRAME_DATA_SIZE   ((UCNT/8) - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
 // END DO NOT CHANGE DIRECTLY
 
 #define OTLEN (4 + UCNT)              // Ordering Table Length 
@@ -138,36 +142,6 @@ void init(void)
     }    
 }
 
-/*
-void draw_data()
-{
-    TILE *tile = &tilebuff[db];
-    ClearOTagR(ot[db], OTLEN);
-    setTile(tile);                              // initialize the blue_tile structure ( fill the length and tag(?) value )
-	setXY0(tile, 5, 26);   // Set X,Y
-	setWH(tile, 4, 4);  
-    if(db == 0)
-    {
-        setRGB0(tile, 60, 180, 255);                // Set color
-    }
-    else
-    {
-        setRGB0(tile, 255, 32, 255);
-    }
-    addPrim(ot[db], tile); 
-    DrawOTag(ot[db] + OTLEN - 1);    
-}
-*/
-
-void display_data()
-{
-    db = !db;
-    DrawSync(0);
-    VSync(0);        
-    PutDispEnv(&disp[db]);
-    PutDrawEnv(&draw[db]);
-}
-
 u_char padbuff[2][34];
 
 typedef struct _PADTYPE
@@ -180,6 +154,8 @@ typedef struct _PADTYPE
     unsigned char	ls_x,ls_y;
 } PADTYPE;
 
+PADTYPE lastpad; 
+
 typedef enum {
     BTN_UP       = 16,
     BTN_DOWN     = 64,
@@ -187,26 +163,6 @@ typedef enum {
     BTN_CIRCLE   = 8192,
     BTN_CROSS    = 16384
 } BTN;
-
-void wait_for_pad(const BTN btn)
-{
-    // controller on port 1 connected
-    volatile PADTYPE *pad = (PADTYPE *)padbuff[0];
-    while(1)
-    {
-            
-        if( pad->stat == 0 )
-        {
-            if( ( pad->type == 0x4 ) || 
-                ( pad->type == 0x5 ) || 
-                ( pad->type == 0x7 ) ) {
-                if(!(pad->btn & btn)) {
-                    break;
-                }
-            }                                        
-        }            
-    }
-}
 
 /* all passed in must be pressed for true */
 uint16_t buttons_pressed(const BTN btn)
@@ -224,32 +180,26 @@ uint16_t buttons_pressed(const BTN btn)
     return 0;
 }
 
-void delay_ds(uint32_t deciseconds) {
-	uint32_t frames = deciseconds * 6;
-	while (frames) {
-		VSync(0);
-		frames--;
-	}
+uint16_t new_buttons_pressed(const BTN btn)
+{
+    // if not currently pressed ignore
+    if(!buttons_pressed(btn)) return 0;
+
+    if( lastpad.stat == 0 )
+    {
+        // At least one must not have been pressed
+        if( ( lastpad.type == 0x4 ) || 
+            ( lastpad.type == 0x5 ) || 
+            ( lastpad.type == 0x7 ) ) {
+            return (lastpad.btn & btn);            
+        }                                        
+    }
+    return 0;
 }
 
 void output_status(const char *message) {
     FntPrint(message);
     FntFlush(-1);
-}
-
-void draw_dataframe(void)
-{    
-    ClearOTagR(ot[db], OTLEN);
-    addPrim(ot[db], &dataframe[0]);
-    addPrim(ot[db], &dataframe[1]);
-    addPrim(ot[db], &dataframe[2]);
-    addPrim(ot[db], &dataframe[3]);
-    
-    for(int j = 0; j < UCNT; j++)
-    {
-        addPrim(ot[db], &datablocks[db][j]);
-    }
-    DrawOTag(ot[db] + OTLEN - 1);
 }
 
 void set_byte(uint8_t value, int pos)
@@ -265,148 +215,6 @@ void set_byte(uint8_t value, int pos)
         }
         pos++;       
     }
-}
-
-void dump_data(const void *data, size_t size)
-{
-    // setup frame
-    DrawSync(0);
-    setRGB0(&draw[0], 255, 255, 255);
-    setRGB0(&draw[1], 255, 255, 255);
-
-    //  top
-    setTile(&dataframe[0]);
-    setXY0(&dataframe[0], STARTX, STARTY);
-    setWH(&dataframe[0], PIXW, BLOCKSIZE);
-    setRGB0(&dataframe[0], 0, 0, 0);
-
-    // bottom
-    setTile(&dataframe[1]);
-    setXY0(&dataframe[1], STARTX, ENDY-BLOCKSIZE);
-    setWH(&dataframe[1], PIXW, BLOCKSIZE);
-    setRGB0(&dataframe[1], 0, 0, 0);
-
-    // left
-    setTile(&dataframe[2]);
-    setXY0(&dataframe[2], STARTX, STARTY+BLOCKSIZE);
-    setWH(&dataframe[2], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
-    setRGB0(&dataframe[2], 0, 0, 0);
-
-    // right
-    setTile(&dataframe[3]);
-    setXY0(&dataframe[3], ENDX-BLOCKSIZE, STARTY+BLOCKSIZE);
-    setWH(&dataframe[3], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
-    setRGB0(&dataframe[3], 0, 0, 0);
-
-    // setup tiles
-    for(int i = 0; i < 2; i++)
-    {
-        int x = USTARTX;
-        int y = USTARTY;
-        for(int j = 0; j < UCNT; j++)
-        {
-            setTile(&datablocks[i][j]);
-            setXY0(&datablocks[i][j], x, y);
-            setWH(&datablocks[i][j], BLOCKSIZE, BLOCKSIZE);
-            setRGB0(&datablocks[i][j], 255, 255, 255);
-            x += BLOCKSIZE;
-            if(x == UENDX)
-            {
-                x = USTARTX;
-                y += BLOCKSIZE;
-            }
-        }
-    }
-
-    // draw and display 
-    draw_dataframe();
-    display_data();
-    
-    //const uint8_t *buf = (const uint8_t*)(data);
-    // current frame index, last frame index, data size in bytes, checksum
-    const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
-    const uint16_t framedatasize = (UCNT/8) - nondatasize;
-    uint16_t fullframecnt = (size / framedatasize);
-    if(size % framedatasize) {
-        fullframecnt += 1;
-    }
-    uint16_t lastframeindex = fullframecnt-1;
-     const uint8_t *buf = ((const uint8_t*)(data));
-    for(uint16_t frameindex = 0; frameindex <= lastframeindex; frameindex++) {
-        const uint16_t datanow = (frameindex == lastframeindex) ? size : framedatasize;              
-
-        // this can be an unaligned load, is this a problem on real hw?
-        const uint32_t checksum = crc32_frame(frameindex, lastframeindex, datanow, buf);
-
-        //printf("dumping frame %u of %u size %u chk 0x%X\n", frameindex, lastframeindex, datanow, checksum);        
-        
-        int bitindex = 0;
-        // write the frame index in LE
-        set_byte(frameindex, bitindex);
-        bitindex += 8;
-        set_byte(frameindex >> 8, bitindex);
-        bitindex += 8;
-
-        // write the last frameindex in LE
-        set_byte(lastframeindex, bitindex);
-        bitindex += 8;
-        set_byte(lastframeindex >> 8, bitindex);
-        bitindex += 8;
-
-        // write the data size in LE
-        set_byte(datanow, bitindex);
-        bitindex += 8;
-        set_byte(datanow >> 8, bitindex);
-        bitindex += 8;
-        
-        // write the data        
-        for(int i = 0; i < datanow; i++) {
-            set_byte(buf[i], bitindex);
-            bitindex += 8;
-        }        
-
-        // write checksum in LE
-        set_byte((uint8_t)(checksum), UCNT-32);
-        set_byte((uint8_t)(checksum >> 8), UCNT-24);
-        set_byte((uint8_t)(checksum >> 16), UCNT-16);
-        set_byte((uint8_t)(checksum >> 24), UCNT-8);
-
-        draw_dataframe();
-        display_data();      
-        delay_ds(5);
-
-        size -= datanow;  
-        buf += framedatasize;
-    }
-
-    setRGB0(&draw[0], 50, 50, 50);
-    setRGB0(&draw[1], 50, 50, 50);
-    ClearOTagR(ot[db], OTLEN);
-    display_data();
-    ClearOTagR(ot[db], OTLEN); 
-}
-
-void dump_save(const char *savename) {
-    printf("opening file %s\n", savename);
-    output_status("Opening file");
-    int32_t fd = open((char*)savename, 0x1);
-    if(fd < 0) {
-        output_status("Failed to open save");
-        return;
-    }
-    delay_ds(1);
-    
-    output_status("Reading from file");
-    uint8_t buf[0x2000];
-    int32_t res = read(fd, buf, sizeof(buf));
-    if(res != (int32_t)sizeof(buf)) {
-        output_status("File read failed");
-        close(fd);        
-        return;
-    }
-    close(fd);
-    output_status("File read success");
-    dump_data(buf, sizeof(buf));
 }
 
 typedef enum {
@@ -437,15 +245,9 @@ typedef struct {
 } MENU;
 
 
-typedef enum {
-    DUMPST_FILE_OPEN,
-    DUMPST_FILE_SLEEP,
-    DUMPST_FILE_START,
-    DUMPST_DUMP
-} DUMPSTATE;
-
 typedef struct {
-    DUMPSTATE state;
+    void (*exit)(void);
+    const char *statustext;
     const uint8_t *buf;
     size_t bufsize;
     const uint8_t *readhead;
@@ -458,10 +260,11 @@ typedef struct {
     uint8_t startdata[6];
     uint8_t enddata[4];
     const uint8_t *printhead;
-
+    
+    // used only for file read dump
     int fd;    
     char filename[25];
-    const char *statustext;
+    
 } DUMP;
 
 typedef struct {
@@ -522,12 +325,12 @@ void menu_show(void)
 void menu_on_vsync(void)
 {
     MENU *menu = &sp.curpage->menu;
-    if(buttons_pressed(BTN_CROSS))
+    if(new_buttons_pressed(BTN_CROSS))
     {
         menu->handle();
         return;
     }
-    else if(buttons_pressed(BTN_TRIANGLE))
+    else if(new_buttons_pressed(BTN_TRIANGLE))
     {
         if(menu->back != sp.current)
         {
@@ -555,71 +358,33 @@ void menu_on_vsync(void)
     menu_show();   
 }
 
-void handle_mcs_list(void)
+void select_device_handle(void)
 {
     screen_page_change(SPT_MCS_LIST);        
 }
 
-void mcs_list_on_vsync(void)
+void dump_frame(void)
 {
-    if(!sp.curpage->menu.loaded)
+    // abort if back button is pressed
+    if(new_buttons_pressed(BTN_TRIANGLE))
     {
-        sp.page_mcs_list.menu.loaded = true;
-
-        InitCARD(1);
-        StartCARD();
-        _bu_init();
-
-        struct DIRENTRY file;
-        if(firstfile("bu00:*", &file) == NULL)
-        {
-            output_status("firstfile failed");
-            return;
-        }
-        int i = 0;
-        do {
-            file.name[19] = '\0';
-            printf("file %s size %u\n", file.name, file.size);
-            sprintf(sp.page_mcs_list.menu.items[i].label, "%s", file.name);
-            sp.page_mcs_list.menu.items[i].mcslist.devnumber = "bu00:";
-            sp.page_mcs_list.menu.items[i].mcslist.filesize = file.size;
-            i++;
-        } while(nextfile(&file) != NULL);
-        sp.page_mcs_list.menu.count = i;        
+        goto dump_frame_cleanup;
     }
-    menu_on_vsync();    
-}
 
-
-void handle_dump_mcs(void)
-{
-    const MENUITEM *item = &sp.page_mcs_list.menu.items[sp.page_mcs_list.menu.index];
-    sprintf(sp.page_dump.dump.filename, "%s%s", item->mcslist.devnumber, item->label);
-    sp.page_dump.dump.read_bytes_left = item->mcslist.filesize;
-    screen_page_change(SPT_DUMP);
-}
-
-void dump_show(void) {
-    sp.page_dump.dump.state = DUMPST_FILE_OPEN;
-    sp.page_dump.dump.statustext = "Opening file";
-    output_status(sp.page_dump.dump.statustext);
-}
-
-bool do_dump(DUMP *dump)
-{
+    DUMP *dump = &sp.page_dump.dump;
     if(dump->sleep_frames == 0) {        
         // all bytes in buf copied, need to read
         if(dump->readhead == dump->readend)
         {
             if(dump->read_bytes_left == 0)
             {
-                return false;
+                goto dump_frame_cleanup;
             }
             size_t toread = (dump->read_bytes_left > dump->bufsize) ? dump->bufsize : dump->read_bytes_left;
             int32_t res = read(dump->fd, (void*)dump->buf, toread);
             if(res != toread) {
                 printf("File read failed\n");
-                return false;
+                goto dump_frame_cleanup;
             }
             dump->read_bytes_left -= toread;
             dump->readhead = dump->buf;
@@ -631,16 +396,14 @@ bool do_dump(DUMP *dump)
         dump->startdata[1] = dump->frameindex >> 8;
 
         // encode size
-        const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
-        const uint16_t framedatasize = (UCNT/8) - nondatasize;
         const size_t bufleft = dump->readend - dump->readhead; 
-        const uint16_t thisframesize = (bufleft > framedatasize) ? framedatasize : bufleft;
+        const uint16_t thisframesize = (bufleft > FRAME_DATA_SIZE) ? FRAME_DATA_SIZE : bufleft;
         dump->startdata[4] = thisframesize;
         dump->startdata[5] = thisframesize >> 8;
         dump->framesize = thisframesize;
 
         // encode crc32
-        const uint32_t checksum = crc32_frame_ex(dump->startdata, nondatasize-sizeof(uint32_t), dump->readhead, thisframesize);
+        const uint32_t checksum = crc32_frame_ex(dump->startdata, FRAME_HEADER_SIZE, dump->readhead, thisframesize);
         dump->enddata[0] = (uint8_t)(checksum);
         dump->enddata[1] = (uint8_t)(checksum >> 8);
         dump->enddata[2] = (uint8_t)(checksum >> 16);
@@ -686,108 +449,189 @@ bool do_dump(DUMP *dump)
     }
 
     dump->sleep_frames--;
-    return true;
+    return;
+
+    dump_frame_cleanup:
+    dump->exit();
 }
 
-bool dump_start(DUMP *dump)
-{
-    dump->state = DUMPST_DUMP;
-    dump->statustext = NULL;  
-
-    const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
-    const uint16_t framedatasize = (UCNT/8) - nondatasize;
-
-    size_t size = (dump->readend - dump->readhead) + dump->read_bytes_left;
-    if(size == 0) {
-        return false;
-    }
-    // https://stackoverflow.com/questions/17944/how-to-round-up-the-result-of-integer-division
-    uint16_t fullframecnt = (size + framedatasize - 1)/framedatasize;
-    uint16_t lastframeindex = fullframecnt-1;
+void dump_start(DUMP *dump, const uint16_t fullframecnt)
+{    
+    const uint16_t lastframeindex = fullframecnt-1;
     dump->frameindex = 0;
     dump->startdata[2] = lastframeindex;
     dump->startdata[3] = lastframeindex >> 8;
 
     setRGB0(&draw[0], 255, 255, 255);
     setRGB0(&draw[1], 255, 255, 255);
-    return do_dump(dump);
+    sp.page_dump.on_vsync = &dump_frame;
+    dump_frame();
 }
 
-static uint8_t Dump_file_buf[0x2000];
-void dump_vsync(void) {
-    DUMP *dump = &sp.page_dump.dump;
-    int32_t res;
-    switch(dump->state)
-    {
-        case DUMPST_FILE_OPEN:
-        dump->fd = open(dump->filename, 0x1);
-        if(dump->fd < 0) {
-            printf("Failed to open file\n");
-            goto DUMP_VSYNC_EXIT;
-        }
-        dump->sleep_frames = 6;
-        dump->state = DUMPST_FILE_SLEEP;
-        break;
-
-        case DUMPST_FILE_SLEEP:
-        dump->sleep_frames--;
-        if(dump->sleep_frames > 0) break;        
-        dump->statustext = "Starting file dump";
-        dump->state = DUMPST_FILE_START;
-        break;
-
-        case DUMPST_FILE_START:
-        dump->buf = (const uint8_t*)&Dump_file_buf;
-        dump->bufsize = sizeof(Dump_file_buf);
-        dump->readhead = dump->buf;
-        dump->readend = dump->readhead;        
-        if(!dump_start(dump))
-        {
-            goto DUMP_VSYNC_FILE_EXIT;
-        }
-        break;
-
-        case DUMPST_DUMP:
-        if(!do_dump(dump))
-        {
-            goto DUMP_VSYNC_FILE_EXIT;
-        }       
-        break;
-    }
-    if(dump->statustext != NULL)
-    {
-        output_status(dump->statustext);
-    }
-    return;
-
-    DUMP_VSYNC_FILE_EXIT:
-    close(dump->fd);    
-    DUMP_VSYNC_EXIT:
+void dump_exit(void)
+{
     setRGB0(&draw[0], 50, 50, 50);
     setRGB0(&draw[1], 50, 50, 50);
     screen_page_change(SPT_MCS_LIST);
 }
 
-//char pribuff[2][32768]; // Primitive buffer
-//char *nextpri;          // Next primitive pointer
+static inline void dump_show(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
+    dump->exit = &dump_exit;
+    dump->statustext = "";
+}
+
+static uint8_t Dump_file_buf[0x2000];
+// read_bytes_left and fd must be set
+void dump_file_start(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
+     
+    dump->buf = (const uint8_t*)&Dump_file_buf;
+    dump->bufsize = sizeof(Dump_file_buf);
+    dump->readhead = dump->buf;
+    dump->readend = dump->readhead;
+
+    const size_t size = dump->read_bytes_left;
+    if(size == 0) {
+        goto dump_file_start_cleanup;
+    }
+
+    const uint16_t fullreads = size/dump->bufsize;
+    const uint16_t frames_per_read = (dump->bufsize + FRAME_DATA_SIZE - 1) / FRAME_DATA_SIZE;
+    const uint16_t leftoverbytes = (size - (fullreads * dump->bufsize));
+    const uint16_t last_read_frames = (leftoverbytes + FRAME_DATA_SIZE - 1) / FRAME_DATA_SIZE;
+    const uint16_t fullframecnt = (fullreads * frames_per_read) + last_read_frames;
+    dump_start(dump, fullframecnt);
+    return;
+
+    dump_file_start_cleanup:
+    dump->exit();
+}
+
+void dump_file_sleep(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
+    dump->sleep_frames--;
+    if(dump->sleep_frames == 0)
+    {
+        dump->statustext = "Starting file dump";
+        sp.page_dump.on_vsync = &dump_file_start;
+    }    
+    output_status(dump->statustext);
+}
+
+void dump_file_exit(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
+    close(dump->fd);
+    dump_exit();
+}
+
+void dump_file_open(void)
+{
+    DUMP *dump = &sp.page_dump.dump;    
+    dump->fd = open(dump->filename, 0x1);
+    if(dump->fd < 0) {
+        printf("Failed to open file\n");
+        dump->exit();
+        return;
+    }
+    dump->exit = &dump_file_exit;
+    dump->sleep_frames = 6;
+    sp.page_dump.on_vsync = &dump_file_sleep;
+    output_status(dump->statustext);
+}
+
+void dump_file_show(void) {
+    dump_show();
+    sp.page_dump.on_vsync = &dump_file_open;
+    sp.page_dump.dump.statustext = "Opening file";    
+    output_status(sp.page_dump.dump.statustext);    
+}
+
+// buf and bufsize must be set
+void dump_buf_start(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
+    const size_t size = dump->bufsize;
+    if(size == 0) {
+        goto dump_buf_start_cleanup;
+    }
+    // https://stackoverflow.com/questions/17944/how-to-round-up-the-result-of-integer-division
+    const uint16_t fullframecnt = (size + FRAME_DATA_SIZE - 1)/FRAME_DATA_SIZE;
+    dump->readhead = dump->buf;
+    dump->readend = dump->readhead + dump->bufsize;
+    dump_start(dump, fullframecnt);
+    return;
+
+    dump_buf_start_cleanup:
+    dump->exit();
+}
+
+void mcs_list_load(void)
+{
+    sp.page_mcs_list.menu.loaded = true;
+    sp.page_mcs_list.on_vsync = &menu_on_vsync;
+
+    InitCARD(1);
+    StartCARD();
+    _bu_init();
+
+    struct DIRENTRY file;
+    if(firstfile("bu00:*", &file) == NULL)
+    {
+        output_status("firstfile failed");
+        return;
+    }
+    int i = 0;
+    do {
+        file.name[19] = '\0';
+        printf("file %s size %u\n", file.name, file.size);
+        sprintf(sp.page_mcs_list.menu.items[i].label, "%s", file.name);
+        sp.page_mcs_list.menu.items[i].mcslist.devnumber = "bu00:";
+        sp.page_mcs_list.menu.items[i].mcslist.filesize = file.size;
+        i++;
+    } while(nextfile(&file) != NULL);
+    sp.page_mcs_list.menu.count = i;
+
+    menu_on_vsync();    
+}
+
+void mcs_list_show(void)
+{
+    menu_show();
+    if(!sp.page_mcs_list.menu.loaded)
+    {
+        sp.page_mcs_list.on_vsync = &mcs_list_load;
+    }
+}
+
+
+void mcs_list_handle(void)
+{
+    const MENUITEM *item = &sp.page_mcs_list.menu.items[sp.page_mcs_list.menu.index];
+    sprintf(sp.page_dump.dump.filename, "%s%s", item->mcslist.devnumber, item->label);
+    sp.page_dump.dump.read_bytes_left = item->mcslist.filesize;
+    sp.page_dump.show = &dump_file_show;
+    screen_page_change(SPT_DUMP);
+}
+
 int main(void)
 {   
     sp.page_select_device.show = &menu_show;
-    sp.page_select_device.on_vsync = &menu_on_vsync;
-    sp.page_select_device.menu.count = 1;
+    sp.page_select_device.on_vsync = &menu_on_vsync;    
     sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
-    sp.page_select_device.menu.handle = &handle_mcs_list;
+    sp.page_select_device.menu.handle = &select_device_handle;
     strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
+    sp.page_select_device.menu.count = 1;
 
-    sp.page_mcs_list.show = &menu_show;
-    sp.page_mcs_list.on_vsync = &mcs_list_on_vsync;
-    sp.page_mcs_list.menu.count = 0;
+    sp.page_mcs_list.show = &mcs_list_show;    
     sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
-    sp.page_mcs_list.menu.handle = &handle_dump_mcs;
+    sp.page_mcs_list.menu.handle = &mcs_list_handle;
     sp.page_mcs_list.menu.loaded = false;
-    
-    sp.page_dump.show = &dump_show;    
-    sp.page_dump.on_vsync= &dump_vsync;
+    sp.page_mcs_list.menu.count = 0;
 
     init();
     InitPAD( padbuff[0], 34, padbuff[1], 34 );
@@ -795,85 +639,19 @@ int main(void)
     padbuff[1][0] = padbuff[1][1] = 0xff;
     StartPAD();
     
-    screen_page_change(SPT_SELECT_DEVICE);
-
-    /*TILE *tile;
-    uint8_t red = 255;
-    for(int i = 0; i < 2; i++)
-    {
-        nextpri = pribuff[i];
-        ClearOTagR(ot[i], OTLEN);
-        tile = (TILE*)nextpri;      // Cast next primitive
-        setTile(tile);              // Initialize the primitive (very important)
-        setXY0(tile, 32, 32);       // Set primitive (x,y) position
-        setWH(tile, 64, 64);        // Set primitive size
-        setRGB0(tile, red*i, 255, 0); // Set color yellow
-        addPrim(ot[i], tile);      // Add primitive to the ordering table        
-        nextpri += sizeof(TILE);    // Advance the next primitive pointer
-    }*/
-
-    for(int i = 0; i < 2; i++)
-    {
-        ClearOTagR(ot[i], OTLEN);
-    }
+    screen_page_change(SPT_SELECT_DEVICE);  
     
     while(1)
     {   
         ClearOTagR(ot[db], OTLEN);
         sp.curpage->on_vsync();
+        lastpad = *(PADTYPE*)padbuff[0];
         DrawSync(0);
         VSync(0);         
         PutDispEnv(&disp[db]);
         PutDrawEnv(&draw[db]);
         DrawOTag(ot[db] + OTLEN - 1);
-        db = !db;
-        
-        
-
-
-        /*TILE *tile;
-        ClearOTagR(ot[db], OTLEN);
-        tile = (TILE*)nextpri;      // Cast next primitive
-        setTile(tile);              // Initialize the primitive (very important)
-        setXY0(tile, 32, 32);       // Set primitive (x,y) position
-        setWH(tile, 64, 64);        // Set primitive size
-        setRGB0(tile, 255, 255, 0); // Set color yellow
-        addPrim(ot[db], tile);      // Add primitive to the ordering table        
-        nextpri += sizeof(TILE);    // Advance the next primitive pointer
-        DrawSync(0);
-        VSync(0);
-        PutDispEnv(&disp[db]);
-        PutDrawEnv(&draw[db]);
-        DrawOTag(ot[db] + OTLEN - 1);
-        db = !db; 
-        nextpri = pribuff[db];
-        while(1);*/
-
-        /*
-        TILE *tile;
-        ClearOTagR(ot[db], OTLEN);
-        tile = (TILE*)nextpri;      // Cast next primitive
-        setTile(tile);              // Initialize the primitive (very important)
-        setXY0(tile, 32, 32);       // Set primitive (x,y) position
-        setWH(tile, 64, 64);        // Set primitive size
-        setRGB0(tile, 255, 255, 0); // Set color yellow
-        addPrim(ot[db], tile);      // Add primitive to the ordering table        
-        nextpri += sizeof(TILE);    // Advance the next primitive pointer
-        DrawOTag(ot[db] + OTLEN - 1);
-        DrawSync(0);
-        VSync(0);
-        db = !db;
-        PutDispEnv(&disp[db]);
-        PutDrawEnv(&draw[db]);
-        */
-
-
-        /*DrawOTag(ot[db] + OTLEN - 1);
-        DrawSync(0);
-        VSync(0);
-        db = !db;
-        PutDispEnv(&disp[db]);
-        PutDrawEnv(&draw[db]);*/              
+        db = !db;        
     }
 
     return 0;
