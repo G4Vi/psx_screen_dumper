@@ -372,8 +372,15 @@ typedef enum {
 } SCREEN_PAGE_TYPE;
 
 typedef struct {
+    const char *devnumber;
+    size_t filesize;    
+} MCS_LIST_EXTRADATA;
+
+typedef struct {
     char label[20];
-    void *extradata;
+    union {
+        MCS_LIST_EXTRADATA mcslist;
+    };
 } MENUITEM;
 
 typedef struct {
@@ -395,9 +402,20 @@ typedef enum {
 
 typedef struct {
     DUMPSTATE state;
-    int fd;
+    const uint8_t *buf;
+    size_t bufsize;
+    const uint8_t *readhead;
+    const uint8_t *readend;
+    uint32_t read_bytes_left; // number of bytes available to be fetched
     int sleep_frames;
-    uint32_t bytes_left; 
+    uint16_t frameindex;
+
+    uint16_t framesize;
+    uint8_t startdata[6];
+    uint8_t enddata[4];
+    const uint8_t *printhead;
+
+    int fd;    
     char filename[25];
     const char *statustext;
 } DUMP;
@@ -469,6 +487,9 @@ void menu_on_vsync(void)
     {
         if(menu->back != sp.current)
         {
+            menu->loaded = false;
+            menu->count = 0;
+            menu->index = 0;
             screen_page_change(menu->back);
             return;
         }
@@ -490,9 +511,8 @@ void menu_on_vsync(void)
     menu_show();   
 }
 
-void mcs_list(void)
+void handle_mcs_list(void)
 {
-    sp.page_mcs_list.menu.loaded = false;
     screen_page_change(SPT_MCS_LIST);        
 }
 
@@ -517,7 +537,8 @@ void mcs_list_on_vsync(void)
             file.name[19] = '\0';
             printf("file %s size %u\n", file.name, file.size);
             sprintf(sp.page_mcs_list.menu.items[i].label, "%s", file.name);
-            sp.page_mcs_list.menu.items[i].extradata = "bu00:";
+            sp.page_mcs_list.menu.items[i].mcslist.devnumber = "bu00:";
+            sp.page_mcs_list.menu.items[i].mcslist.filesize = file.size;
             i++;
         } while(nextfile(&file) != NULL);
         sp.page_mcs_list.menu.count = i;        
@@ -529,8 +550,8 @@ void mcs_list_on_vsync(void)
 void handle_dump_mcs(void)
 {
     const MENUITEM *item = &sp.page_mcs_list.menu.items[sp.page_mcs_list.menu.index];
-    sprintf(sp.page_dump.dump.filename, "%s%s", (char*)item->extradata, item->label);
-    sp.page_dump.dump.bytes_left = 0x2000; //todo set to actual size
+    sprintf(sp.page_dump.dump.filename, "%s%s", item->mcslist.devnumber, item->label);
+    sp.page_dump.dump.read_bytes_left = item->mcslist.filesize;
     screen_page_change(SPT_DUMP);
 }
 
@@ -538,14 +559,115 @@ void dump_show(void) {
     sp.page_dump.dump.state = DUMPST_FILE_OPEN;
     sp.page_dump.dump.statustext = "Opening file";
     output_status(sp.page_dump.dump.statustext);
-    /*dump_save(sp.page_dump.dump.filename);
-    screen_page_change(SPT_MCS_LIST);*/
 }
 
+bool do_dump(DUMP *dump)
+{
+    if(dump->sleep_frames == 0) {        
+        // all bytes in buf copied, need to read
+        if(dump->readhead == dump->readend)
+        {
+            if(dump->read_bytes_left == 0)
+            {
+                return false;
+            }
+            size_t toread = (dump->read_bytes_left > dump->bufsize) ? dump->bufsize : dump->read_bytes_left;
+            int32_t res = read(dump->fd, (void*)dump->buf, toread);
+            if(res != toread) {
+                printf("File read failed\n");
+                return false;
+            }
+            dump->read_bytes_left -= toread;
+            dump->readhead = dump->buf;
+            dump->readend = dump->readhead +  toread;
+        }
 
+        // encode frameindex
+        dump->startdata[0] = dump->frameindex;
+        dump->startdata[1] = dump->frameindex >> 8;
+
+        // encode size
+        const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
+        const uint16_t framedatasize = (UCNT/8) - nondatasize;
+        const size_t bufleft = dump->readend - dump->readhead; 
+        const uint16_t thisframesize = (bufleft > framedatasize) ? framedatasize : bufleft;
+        dump->startdata[4] = thisframesize;
+        dump->startdata[5] = thisframesize >> 8;
+        dump->framesize = thisframesize;
+
+        // encode crc32
+        const uint32_t checksum = crc32_frame_ex(dump->startdata, nondatasize-sizeof(uint32_t), dump->readhead, thisframesize);
+        dump->enddata[0] = (uint8_t)(checksum);
+        dump->enddata[1] = (uint8_t)(checksum >> 8);
+        dump->enddata[2] = (uint8_t)(checksum >> 16);
+        dump->enddata[3] = (uint8_t)(checksum >> 24);        
+
+        // display for half a second
+        dump->sleep_frames = 30;
+
+        dump->printhead = dump->readhead;
+        dump->readhead += thisframesize;
+        dump->frameindex++;
+    }
+
+    // calculate the blocks
+    int bitindex = 0;
+    // start data
+    for(int i = 0; i < 6; i++)
+    {
+        set_byte(dump->startdata[i], bitindex);
+        bitindex += 8;
+    }
+    // actual data
+    for(int i = 0; i < dump->framesize; i++) {
+        set_byte(dump->printhead[i], bitindex);
+        bitindex += 8;
+    }
+    // end data
+    bitindex = UCNT-32;
+    for(int i = 0; i < 4; i++) {
+        set_byte(dump->enddata[i], bitindex);
+        bitindex += 8;
+    }
+
+    // draw a frame of data
+    ClearOTagR(ot[db], OTLEN);
+    addPrim(ot[db], &dataframe[0]);
+    addPrim(ot[db], &dataframe[1]);
+    addPrim(ot[db], &dataframe[2]);
+    addPrim(ot[db], &dataframe[3]);
+
+    for(int j = 0; j < UCNT; j++)
+    {
+        addPrim(ot[db], &datablocks[db][j]);
+    }
+
+    dump->sleep_frames--;
+    return true;
+}
+
+bool dump_start(DUMP *dump)
+{
+    const uint16_t nondatasize = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t); 
+    const uint16_t framedatasize = (UCNT/8) - nondatasize;
+
+    size_t size = (dump->readend - dump->readhead) + dump->read_bytes_left;
+    if(size == 0) {
+        return false;
+    }
+    // https://stackoverflow.com/questions/17944/how-to-round-up-the-result-of-integer-division
+    uint16_t fullframecnt = (size + framedatasize - 1)/framedatasize;
+    uint16_t lastframeindex = fullframecnt-1;
+    dump->frameindex = 0;
+    dump->startdata[2] = lastframeindex;
+    dump->startdata[3] = lastframeindex >> 8;
+
+    return do_dump(dump);
+}
+
+static uint8_t Dump_file_buf[0x2000];
 void dump_vsync(void) {
     DUMP *dump = &sp.page_dump.dump;
-    uint8_t buf[0x2000];
     int32_t res;
     switch(dump->state)
     {
@@ -563,20 +685,24 @@ void dump_vsync(void) {
         dump->sleep_frames--;
         if(dump->sleep_frames > 0) break;        
         dump->statustext = "Starting file dump";
+        dump->buf = (const uint8_t*)&Dump_file_buf;
+        dump->bufsize = sizeof(Dump_file_buf);
+        dump->readhead = dump->buf;
+        dump->readend = dump->readhead;
         dump->state = DUMPST_FILE_READ;
         break;
 
         /* todo callback is better idea*/
         case DUMPST_FILE_READ:        
-        res = read(dump->fd, buf, sizeof(buf));
-        if(res != (int32_t)sizeof(buf)) {
+        res = read(dump->fd, (void*)dump->buf, dump->bufsize);
+        if(res != (int32_t)dump->bufsize) {
             printf("File read failed\n");
             goto DUMP_VSYNC_FILE_EXIT;
         }      
         /* fallthrough */
         case DUMPST_DUMP:
         dump->statustext = NULL;     
-        dump_data(buf, sizeof(buf));
+        dump_data(dump->buf, dump->bufsize);
         goto DUMP_VSYNC_FILE_EXIT;
         break;
     }
@@ -600,7 +726,7 @@ int main(void)
     sp.page_select_device.on_vsync = &menu_on_vsync;
     sp.page_select_device.menu.count = 1;
     sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
-    sp.page_select_device.menu.handle = &mcs_list;
+    sp.page_select_device.menu.handle = &handle_mcs_list;
     strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
 
     sp.page_mcs_list.show = &menu_show;
