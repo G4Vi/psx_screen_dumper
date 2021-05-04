@@ -49,7 +49,7 @@
 #define FRAME_DATA_SIZE   ((UCNT/8) - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
 // END DO NOT CHANGE DIRECTLY
 
-#define OTLEN (4 + UCNT)              // Ordering Table Length 
+#define OTLEN (4 + UCNT+ (16*6)+(16*6))              // Ordering Table Length 
 
 DISPENV disp[2];             // Double buffered DISPENV and DRAWENV
 DRAWENV draw[2];
@@ -60,6 +60,85 @@ short db = 0;                 // index of which buffer is used, values 0, 1
 
 TILE dataframe[4];
 TILE datablocks[2][UCNT];
+    
+DR_TPAGE fonttpage[2];
+SPRT font[2][16][6];
+
+#define CHAR_HEIGHT 15
+#define CHAR_VRAM_WIDTH 8
+
+#define FONT_X (SCREENXRES)
+#define CLUT_X (FONT_X)
+#define CLUT_Y (6 * CHAR_HEIGHT)
+#define CHAR_DRAW_WIDTH 10
+
+
+void decompressfont() {
+	// Font is 1bpp. We have to convert each character to 4bpp.
+	const uint8_t * rom_charset = (const uint8_t *) 0xBFC7F8DE;
+	uint8_t charbuf[CHAR_HEIGHT * CHAR_VRAM_WIDTH / 2];
+    RECT currentrect;
+
+	// Iterate through the 16x6 character table
+	for (uint_fast8_t tabley = 0; tabley < 6; tabley++) {
+		for (uint_fast8_t tablex = 0; tablex < 16; tablex++) {
+			uint8_t * bufferpos = charbuf;
+
+			// Iterate through each line of the 8x15 character
+			for (uint_fast8_t chary = 0; chary < 15; chary++) {
+				uint_fast8_t char1bpp = *rom_charset;
+				uint_fast8_t bpos = 0;
+				rom_charset++;
+
+				// Iterate through each column of the character
+				while (bpos < 8) {
+					uint_fast8_t char4bpp = 0;
+
+					if (char1bpp & 0x80) {
+						char4bpp |= 0x0F;
+					}
+					bpos++;
+
+					if (char1bpp & 0x40) {
+						char4bpp |= 0xF0;
+					}
+					bpos++;
+
+					*bufferpos = char4bpp;
+					bufferpos++;
+					char1bpp = char1bpp << 2;
+				}
+			}
+
+			// GPU_dw takes units in 16bpp units, so we have to scale by 1/4
+			//GPU_dw(FONT_X + tablex * CHAR_VRAM_WIDTH * 4 / 16, tabley * CHAR_HEIGHT, CHAR_VRAM_WIDTH * 4 / 16, CHAR_HEIGHT, (uint16_t *) charbuf);
+            setRECT(&currentrect, FONT_X + tablex * CHAR_VRAM_WIDTH * 4 / 16, tabley * CHAR_HEIGHT, CHAR_VRAM_WIDTH * 4 / 16, CHAR_HEIGHT);
+            LoadImage(&currentrect, charbuf);
+		}
+	}
+}
+
+void dumpfont(void) {
+    SPRT *sprt = &font[db][0][0];
+    for (uint_fast8_t tabley = 0; tabley < 6; tabley++) {
+		for (uint_fast8_t tablex = 0; tablex < 16; tablex++) {            
+            //SPRT *sprt = &font[db][tablex][tabley];
+            setSprt(sprt);
+            setXY0(sprt, 10 + (tablex * 10), 10 + (tabley*17));
+            setWH(sprt, CHAR_VRAM_WIDTH, CHAR_HEIGHT);
+            // set position in texture
+            const uint16_t uoffs =  tablex * CHAR_VRAM_WIDTH;
+            const uint16_t voffs =  tabley * CHAR_HEIGHT;
+            printf("uoffs %u voffs %u\n", uoffs, voffs);
+            setUV0(sprt, uoffs, voffs);
+            setClut(sprt, CLUT_X, CLUT_Y);
+            setRGB0(sprt, 128, 128, 128);
+            addPrim(ot[db], sprt);
+            sprt++;
+        }
+    }    
+    addPrim(ot[db], &fonttpage[db]);
+}
 
 void init(void)
 {
@@ -96,6 +175,16 @@ void init(void)
     thedata = 0x7F200000;
     LoadImage(&rect, &thedata);*/
     FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );
+
+    // load the font from bios
+    decompressfont();
+    RECT currentrect;
+    setRECT(&currentrect, CLUT_X, CLUT_Y, 16, 1);
+    static const uint16_t PALETTE[16] = { 0x0000, 0x0842, 0x1084, 0x18C6, 0x2108, 0x294A, 0x318C, 0x39CE, 0x4631, 0x4E73, 0x56B5, 0x5EF7, 0x6739, 0x6F7B, 0x77BD, 0x7FFF };
+    LoadImage(&currentrect, &PALETTE);
+    const uint16_t tpage = getTPage(0, 0, FONT_X, 0);
+    setDrawTPage(&fonttpage[0], 0, 0, tpage);
+    setDrawTPage(&fonttpage[1], 0, 0, tpage);
 
     //  top
     setTile(&dataframe[0]);
@@ -642,8 +731,9 @@ int main(void)
     screen_page_change(SPT_SELECT_DEVICE);  
     
     while(1)
-    {   
+    {       
         ClearOTagR(ot[db], OTLEN);
+        dumpfont();
         sp.curpage->on_vsync();
         lastpad = *(PADTYPE*)padbuff[0];
         DrawSync(0);
