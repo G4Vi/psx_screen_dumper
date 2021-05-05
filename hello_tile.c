@@ -13,15 +13,8 @@
 
 #include "crc.h"
 
-#define VMODE 0         // Video Mode : 0 : NTSC, 1: PAL
-
 #define SCREENXRES 320
 #define SCREENYRES 240
-
-#define MARGINX 0            // margins for text display
-#define MARGINY 32
-
-#define FONTSIZE 8 * 7       // Text Field Height
 
 // data dumper settings
 #define BLOCKSIZE 4
@@ -30,6 +23,21 @@
 #define MAXENDX   315
 #define MAXENDY   230
 // end data dumper settings
+
+#define MARGINX 0            // margins for text display
+#define MARGINY 32
+#define FONTSIZE 8 * 7       // Text Field Height
+
+#define CHAR_HEIGHT 15
+#define CHAR_WIDTH 8
+#define FONT_X (SCREENXRES)
+#define CLUT_X (FONT_X)
+#define CLUT_Y (6 * CHAR_HEIGHT)
+#define FONT_COLS 16
+#define FONT_ROWS 6
+#define FONT_TEXTURES 1
+
+
 // DO NOT CHANGE DIRECTLY
 #define PIXW (((MAXENDX-STARTX)/BLOCKSIZE)*BLOCKSIZE)
 #define PIXH (((MAXENDY-STARTY) / BLOCKSIZE)*BLOCKSIZE)
@@ -49,34 +57,33 @@
 #define FRAME_DATA_SIZE   ((UCNT/8) - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
 // END DO NOT CHANGE DIRECTLY
 
-#define OTLEN (4 + UCNT+ (16*6)+(16*6))              // Ordering Table Length 
+TILE dataframe[4];
+TILE datablocks[2][UCNT];
+    
+DR_TPAGE fonttpage[2];
+#define FONT_SPRT_CNT ((SCREENXRES/CHAR_WIDTH)*(SCREENYRES/CHAR_HEIGHT))
+SPRT font[2][FONT_SPRT_CNT];
+SPRT *fontSPRT;
+#define FONT_OTLEN (1 + FONT_SPRT_CNT)
+
+#define MENU_OTLEN 2
+TILE menu_selected[MENU_OTLEN];
+
+
+#define OTLEN (4 + UCNT+ FONT_OTLEN + MENU_OTLEN)              // Ordering Table Length 
 
 DISPENV disp[2];             // Double buffered DISPENV and DRAWENV
 DRAWENV draw[2];
 
 u_long ot[2][OTLEN];          // double ordering table of length 8 * 32 = 256 bits / 32 bytes
-
 short db = 0;                 // index of which buffer is used, values 0, 1
 
-TILE dataframe[4];
-TILE datablocks[2][UCNT];
-    
-DR_TPAGE fonttpage[2];
-SPRT font[2][16][6];
-
-#define CHAR_HEIGHT 15
-#define CHAR_VRAM_WIDTH 8
-
-#define FONT_X (SCREENXRES)
-#define CLUT_X (FONT_X)
-#define CLUT_Y (6 * CHAR_HEIGHT)
-#define CHAR_DRAW_WIDTH 10
 
 
 void decompressfont() {
 	// Font is 1bpp. We have to convert each character to 4bpp.
 	const uint8_t * rom_charset = (const uint8_t *) 0xBFC7F8DE;
-	uint8_t charbuf[CHAR_HEIGHT * CHAR_VRAM_WIDTH / 2];
+	uint8_t charbuf[CHAR_HEIGHT * CHAR_WIDTH / 2];
     RECT currentrect;
 
 	// Iterate through the 16x6 character table
@@ -111,33 +118,67 @@ void decompressfont() {
 			}
 
 			// GPU_dw takes units in 16bpp units, so we have to scale by 1/4
-			//GPU_dw(FONT_X + tablex * CHAR_VRAM_WIDTH * 4 / 16, tabley * CHAR_HEIGHT, CHAR_VRAM_WIDTH * 4 / 16, CHAR_HEIGHT, (uint16_t *) charbuf);
-            setRECT(&currentrect, FONT_X + tablex * CHAR_VRAM_WIDTH * 4 / 16, tabley * CHAR_HEIGHT, CHAR_VRAM_WIDTH * 4 / 16, CHAR_HEIGHT);
+            setRECT(&currentrect, FONT_X + tablex * CHAR_WIDTH * 4 / 16, tabley * CHAR_HEIGHT, CHAR_WIDTH * 4 / 16, CHAR_HEIGHT);
             LoadImage(&currentrect, charbuf);
 		}
 	}
 }
 
 void dumpfont(void) {
-    SPRT *sprt = &font[db][0][0];
     for (uint_fast8_t tabley = 0; tabley < 6; tabley++) {
-		for (uint_fast8_t tablex = 0; tablex < 16; tablex++) {            
+		for (uint_fast8_t tablex = 0; tablex < 16; tablex++) {     
+            SPRT *sprt = fontSPRT;       
             //SPRT *sprt = &font[db][tablex][tabley];
             setSprt(sprt);
             setXY0(sprt, 10 + (tablex * 10), 10 + (tabley*17));
-            setWH(sprt, CHAR_VRAM_WIDTH, CHAR_HEIGHT);
+            setWH(sprt, CHAR_WIDTH, CHAR_HEIGHT);
             // set position in texture
-            const uint16_t uoffs =  tablex * CHAR_VRAM_WIDTH;
+            const uint16_t uoffs =  tablex * CHAR_WIDTH;
             const uint16_t voffs =  tabley * CHAR_HEIGHT;
-            printf("uoffs %u voffs %u\n", uoffs, voffs);
+            //printf("uoffs %u voffs %u\n", uoffs, voffs);
             setUV0(sprt, uoffs, voffs);
             setClut(sprt, CLUT_X, CLUT_Y);
             setRGB0(sprt, 128, 128, 128);
             addPrim(ot[db], sprt);
-            sprt++;
+            fontSPRT++;
         }
     }    
-    addPrim(ot[db], &fonttpage[db]);
+}
+
+void print_text_at(const char *text, int16_t x, int16_t y, bool overstrike)
+{
+    while (*text != '\0') {
+		int tex_idx = *text - '!';
+		if (tex_idx >= 0 && tex_idx < 96) {
+			// Font has a yen symbol where the \ should be
+			if (tex_idx == '\\' - '!') {
+				tex_idx = 95;
+			}
+    
+            setSprt(fontSPRT);
+            setXY0(fontSPRT, x, y);
+            setWH(fontSPRT, CHAR_WIDTH, CHAR_HEIGHT);
+            // set position in texture
+            const uint16_t uoffs =  (tex_idx % 16) * CHAR_WIDTH;
+            const uint16_t voffs =  (tex_idx / 16) * CHAR_HEIGHT;
+            setUV0(fontSPRT, uoffs, voffs);
+            setClut(fontSPRT, CLUT_X, CLUT_Y);
+            setRGB0(fontSPRT, 128, 128, 128);
+            addPrim(ot[db], fontSPRT);
+            fontSPRT++;
+
+            if(overstrike)
+            {
+                *fontSPRT = *(fontSPRT-1);
+                setXY0(fontSPRT, x+1, y);
+                addPrim(ot[db], fontSPRT);
+                fontSPRT++;
+            }
+		}
+
+		x += 10;
+		text++;
+	}    
 }
 
 void init(void)
@@ -150,7 +191,7 @@ void init(void)
     SetDefDrawEnv(&draw[0], 0, SCREENYRES, SCREENXRES, SCREENYRES);
     SetDefDrawEnv(&draw[1], 0, 0, SCREENXRES, SCREENYRES);
     
-    if (VMODE)
+    if (0)
     {
         SetVideoMode(MODE_PAL);
         disp[0].screen.y += 8;
@@ -185,6 +226,11 @@ void init(void)
     const uint16_t tpage = getTPage(0, 0, FONT_X, 0);
     setDrawTPage(&fonttpage[0], 0, 0, tpage);
     setDrawTPage(&fonttpage[1], 0, 0, tpage);
+
+    setTile(&menu_selected[0]);
+    setRGB0(&menu_selected[0], 0, 0, 0);
+    setTile(&menu_selected[1]);
+    setRGB0(&menu_selected[1], 0, 0, 0);
 
     //  top
     setTile(&dataframe[0]);
@@ -287,8 +333,9 @@ uint16_t new_buttons_pressed(const BTN btn)
 }
 
 void output_status(const char *message) {
-    FntPrint(message);
-    FntFlush(-1);
+    /*FntPrint(message);
+    FntFlush(-1);*/
+    print_text_at(message, 20, SCREENYRES-30, false);
 }
 
 void set_byte(uint8_t value, int pos)
@@ -309,7 +356,8 @@ void set_byte(uint8_t value, int pos)
 typedef enum {
     SPT_SELECT_DEVICE,
     SPT_MCS_LIST,
-    SPT_DUMP
+    SPT_DUMP,
+    SPT_DBG_FONT
 } SCREEN_PAGE_TYPE;
 
 typedef struct {
@@ -374,6 +422,7 @@ typedef struct {
     SCREEN_PAGE page_select_device;
     SCREEN_PAGE page_mcs_list;
     SCREEN_PAGE page_dump;
+    SCREEN_PAGE page_dbg_font;
 
     SCREEN_PAGE *curpage;
 } SCREEN_PAGES;
@@ -395,6 +444,9 @@ void screen_page_change(const SCREEN_PAGE_TYPE new)
         case SPT_DUMP:
         sp.curpage = &sp.page_dump;
         break;
+        case SPT_DBG_FONT:
+        sp.curpage = &sp.page_dbg_font;
+        break;
     }
     sp.curpage->show();
 }
@@ -404,11 +456,24 @@ void screen_page_change(const SCREEN_PAGE_TYPE new)
 void menu_show(void)
 {
     MENU *menu = &sp.curpage->menu;
+    uint16_t x = 20;
+    uint16_t centery = (SCREENYRES / 2)-(CHAR_HEIGHT/2);
+    uint16_t y = centery - ((menu->count/2) * 20);
+
+    
     for(int i = 0; i < menu->count; i++)
-    {
-        FntPrint("%s\n", menu->items[i].label);
+    {        
+        print_text_at(menu->items[i].label, x, y, true);
+        if(i == menu->index)
+        {
+            setXY0(&menu_selected[db], 0, y-2);
+            setWH(&menu_selected[db], SCREENXRES, 20);
+            addPrim(ot[db], &menu_selected[db]);
+        }
+        y += 20;
+        //FntPrint("%s\n", menu->items[i].label);
     }
-    FntFlush(-1);
+    //FntFlush(-1);
 }
 
 void menu_on_vsync(void)
@@ -449,7 +514,14 @@ void menu_on_vsync(void)
 
 void select_device_handle(void)
 {
-    screen_page_change(SPT_MCS_LIST);        
+    if(sp.page_select_device.menu.index == 0)
+    {
+        screen_page_change(SPT_MCS_LIST);     
+    }
+    else
+    {
+        screen_page_change(SPT_DBG_FONT);
+    }       
 }
 
 void dump_frame(void)
@@ -599,6 +671,11 @@ void dump_file_start(void)
     dump->exit();
 }
 
+void dump_file_sleep2(void)
+{
+    sp.page_dump.on_vsync = &dump_file_start;
+}
+
 void dump_file_sleep(void)
 {
     DUMP *dump = &sp.page_dump.dump;
@@ -606,7 +683,7 @@ void dump_file_sleep(void)
     if(dump->sleep_frames == 0)
     {
         dump->statustext = "Starting file dump";
-        sp.page_dump.on_vsync = &dump_file_start;
+        sp.page_dump.on_vsync = &dump_file_sleep2;
     }    
     output_status(dump->statustext);
 }
@@ -688,12 +765,18 @@ void mcs_list_load(void)
     menu_on_vsync();    
 }
 
+void mcs_list_once(void)
+{
+    sp.page_mcs_list.on_vsync = &mcs_list_load;
+}
+
 void mcs_list_show(void)
 {
     menu_show();
+    output_status("Reading MC files");
     if(!sp.page_mcs_list.menu.loaded)
     {
-        sp.page_mcs_list.on_vsync = &mcs_list_load;
+        sp.page_mcs_list.on_vsync = &mcs_list_once;
     }
 }
 
@@ -707,6 +790,21 @@ void mcs_list_handle(void)
     screen_page_change(SPT_DUMP);
 }
 
+void dbg_font_show(void)
+{
+
+}
+
+void dbg_font_on_vsync(void)
+{
+    if(new_buttons_pressed(BTN_CROSS) || new_buttons_pressed(BTN_TRIANGLE))
+    {
+        screen_page_change(SPT_SELECT_DEVICE);
+        return;
+    }
+    dumpfont();
+}
+
 int main(void)
 {   
     sp.page_select_device.show = &menu_show;
@@ -714,7 +812,8 @@ int main(void)
     sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
     sp.page_select_device.menu.handle = &select_device_handle;
     strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
-    sp.page_select_device.menu.count = 1;
+    strcpy(sp.page_select_device.menu.items[1].label, "test font");
+    sp.page_select_device.menu.count = 2;
 
     sp.page_mcs_list.show = &mcs_list_show;    
     sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
@@ -722,19 +821,25 @@ int main(void)
     sp.page_mcs_list.menu.loaded = false;
     sp.page_mcs_list.menu.count = 0;
 
+    sp.page_dbg_font.show = &dbg_font_show;
+    sp.page_dbg_font.on_vsync = &dbg_font_on_vsync;
+
     init();
     InitPAD( padbuff[0], 34, padbuff[1], 34 );
     padbuff[0][0] = padbuff[0][1] = 0xff;
     padbuff[1][0] = padbuff[1][1] = 0xff;
     StartPAD();
     
-    screen_page_change(SPT_SELECT_DEVICE);  
+    //screen_page_change(SPT_SELECT_DEVICE);
+    sp.current = SPT_SELECT_DEVICE;
+    sp.curpage = &sp.page_select_device;   
     
     while(1)
-    {       
+    {   
+        fontSPRT = &font[db][0];    
         ClearOTagR(ot[db], OTLEN);
-        dumpfont();
         sp.curpage->on_vsync();
+        addPrim(ot[db], &fonttpage[db]);
         lastpad = *(PADTYPE*)padbuff[0];
         DrawSync(0);
         VSync(0);         
