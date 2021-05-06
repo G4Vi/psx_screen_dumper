@@ -363,14 +363,25 @@ typedef enum {
 typedef struct {
     const char *devnumber;
     size_t filesize;    
-} MCS_LIST_EXTRADATA;
+} MCS_LIST_ITEM_EXTRADATA;
+
+typedef struct {
+    SCREEN_PAGE_TYPE changeto;
+    const char *devnumber;
+    const char *printdev;
+} SELECT_DEVICE_ITEM_EXTRADATA;
 
 typedef struct {
     char label[20];
     union {
-        MCS_LIST_EXTRADATA mcslist;
+        SELECT_DEVICE_ITEM_EXTRADATA selectdevice;
+        MCS_LIST_ITEM_EXTRADATA mcslist;
     };
 } MENUITEM;
+
+typedef struct {
+    const char *devnumber;
+} MENU_DIRECTORY_EXTRADATA;
 
 typedef struct {
     uint16_t count;
@@ -378,7 +389,12 @@ typedef struct {
     void(*handle)(void);
     SCREEN_PAGE_TYPE back;
     bool loaded;
+    union {
+        MENU_DIRECTORY_EXTRADATA mde;
+    };
     MENUITEM items[15];
+    char title[24];
+    const char *status;
 } MENU;
 
 
@@ -456,11 +472,16 @@ void screen_page_change(const SCREEN_PAGE_TYPE new)
 void menu_show(void)
 {
     MENU *menu = &sp.curpage->menu;
+    // print title
+    const char *titletext = menu->title;
+    uint16_t centerx = (SCREENXRES / 2)-((CHAR_WIDTH+1));
+    uint16_t xtitle = centerx - ((strlen(titletext)/2)*(CHAR_WIDTH+1));
+    print_text_at(titletext, xtitle, 20, true);
+
+    // draw the menu items
     uint16_t x = 20;
     uint16_t centery = (SCREENYRES / 2)-(CHAR_HEIGHT/2);
-    uint16_t y = centery - ((menu->count/2) * 20);
-
-    
+    uint16_t y = centery - ((menu->count/2) * 20);    
     for(int i = 0; i < menu->count; i++)
     {        
         print_text_at(menu->items[i].label, x, y, true);
@@ -471,9 +492,7 @@ void menu_show(void)
             addPrim(ot[db], &menu_selected[db]);
         }
         y += 20;
-        //FntPrint("%s\n", menu->items[i].label);
     }
-    //FntFlush(-1);
 }
 
 void menu_on_vsync(void)
@@ -481,8 +500,12 @@ void menu_on_vsync(void)
     MENU *menu = &sp.curpage->menu;
     if(new_buttons_pressed(BTN_CROSS))
     {
-        menu->handle();
-        return;
+        menu->status = NULL;
+        if(menu->index < menu->count)
+        {
+            menu->handle();
+            return;
+        }        
     }
     else if(new_buttons_pressed(BTN_TRIANGLE))
     {
@@ -491,37 +514,48 @@ void menu_on_vsync(void)
             menu->loaded = false;
             menu->count = 0;
             menu->index = 0;
+            menu->status = NULL;
             screen_page_change(menu->back);
             return;
         }
     }
-    else if(buttons_pressed(BTN_UP))
+    else if(new_buttons_pressed(BTN_UP))
     {
         if(menu->index > 0)
         {
             menu->index--;           
         }
     }
-    else if(buttons_pressed(BTN_DOWN))
+    else if(new_buttons_pressed(BTN_DOWN))
     {
         if(menu->index < (menu->count-1))
         {
             menu->index++;            
         }
     }
-    menu_show();   
+    menu_show();
+    if(menu->status != NULL) {
+        output_status(menu->status);
+    }   
 }
 
 void select_device_handle(void)
 {
-    if(sp.page_select_device.menu.index == 0)
+    const SELECT_DEVICE_ITEM_EXTRADATA *sditem = &sp.page_select_device.menu.items[sp.page_select_device.menu.index].selectdevice;
+    switch(sditem->changeto)
     {
-        screen_page_change(SPT_MCS_LIST);     
-    }
-    else
-    {
+        case SPT_MCS_LIST:
+        sp.page_mcs_list.menu.mde.devnumber = sditem->devnumber;
+        sprintf(sp.page_mcs_list.menu.title, "Dump %s saves", sditem->printdev);
+        screen_page_change(SPT_MCS_LIST); 
+        break;
+        case SPT_DBG_FONT:
         screen_page_change(SPT_DBG_FONT);
-    }       
+        break;
+        default:
+        sp.page_select_device.menu.status = "Invalid menu item";
+        break;
+    }      
 }
 
 void dump_frame(void)
@@ -746,22 +780,29 @@ void mcs_list_load(void)
     _bu_init();
 
     struct DIRENTRY file;
-    if(firstfile("bu00:*", &file) == NULL)
-    {
-        output_status("firstfile failed");
-        return;
+    char tosearch[20];
+    sprintf(tosearch, "%s*", sp.page_mcs_list.menu.mde.devnumber);
+    printf("tosearch %s\n", tosearch);
+    if(firstfile(tosearch, &file) == NULL)
+    {        
+        sp.page_mcs_list.menu.status = "firstfile failed";
+        goto mcs_list_load_exit;
     }
     int i = 0;
     do {
         file.name[19] = '\0';
         printf("file %s size %u\n", file.name, file.size);
         sprintf(sp.page_mcs_list.menu.items[i].label, "%s", file.name);
-        sp.page_mcs_list.menu.items[i].mcslist.devnumber = "bu00:";
+        sp.page_mcs_list.menu.items[i].mcslist.devnumber = sp.page_mcs_list.menu.mde.devnumber;
         sp.page_mcs_list.menu.items[i].mcslist.filesize = file.size;
         i++;
     } while(nextfile(&file) != NULL);
     sp.page_mcs_list.menu.count = i;
+    if(i == 0) {
+        sp.page_mcs_list.menu.status = "No save files found!";
+    }
 
+mcs_list_load_exit:
     menu_on_vsync();    
 }
 
@@ -811,9 +852,21 @@ int main(void)
     sp.page_select_device.on_vsync = &menu_on_vsync;    
     sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
     sp.page_select_device.menu.handle = &select_device_handle;
+    strcpy(sp.page_select_device.menu.title, "PSX Screen Dumper");
+
     strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
-    strcpy(sp.page_select_device.menu.items[1].label, "test font");
-    sp.page_select_device.menu.count = 2;
+    sp.page_select_device.menu.items[0].selectdevice.changeto = SPT_MCS_LIST;
+    sp.page_select_device.menu.items[0].selectdevice.devnumber = "bu00:";
+    sp.page_select_device.menu.items[0].selectdevice.printdev = "mc0";
+
+    strcpy(sp.page_select_device.menu.items[1].label, "Dump mc1 saves");
+    sp.page_select_device.menu.items[1].selectdevice.changeto = SPT_MCS_LIST;
+    sp.page_select_device.menu.items[1].selectdevice.devnumber = "bu10:";
+    sp.page_select_device.menu.items[1].selectdevice.printdev = "mc1";
+
+    strcpy(sp.page_select_device.menu.items[2].label, "test font");
+    sp.page_select_device.menu.items[2].selectdevice.changeto = SPT_DBG_FONT;
+    sp.page_select_device.menu.count = 3;
 
     sp.page_mcs_list.show = &mcs_list_show;    
     sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
