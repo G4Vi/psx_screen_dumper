@@ -357,7 +357,8 @@ typedef enum {
     SPT_SELECT_DEVICE,
     SPT_MCS_LIST,
     SPT_DUMP,
-    SPT_DBG_FONT
+    SPT_DBG_FONT,
+    SPT_CREDITS
 } SCREEN_PAGE_TYPE;
 
 typedef struct {
@@ -399,6 +400,7 @@ typedef struct {
 
 
 typedef struct {
+    SCREEN_PAGE_TYPE back;
     void (*exit)(void);
     const char *statustext;
     const uint8_t *buf;
@@ -439,6 +441,7 @@ typedef struct {
     SCREEN_PAGE page_mcs_list;
     SCREEN_PAGE page_dump;
     SCREEN_PAGE page_dbg_font;
+    SCREEN_PAGE page_credits;
 
     SCREEN_PAGE *curpage;
 } SCREEN_PAGES;
@@ -462,6 +465,9 @@ void screen_page_change(const SCREEN_PAGE_TYPE new)
         break;
         case SPT_DBG_FONT:
         sp.curpage = &sp.page_dbg_font;
+        break;
+        case SPT_CREDITS:
+        sp.curpage = &sp.page_credits;
         break;
     }
     sp.curpage->show();
@@ -539,6 +545,7 @@ void menu_on_vsync(void)
     }   
 }
 
+void dump_buf_show(void);
 void select_device_handle(void)
 {
     const SELECT_DEVICE_ITEM_EXTRADATA *sditem = &sp.page_select_device.menu.items[sp.page_select_device.menu.index].selectdevice;
@@ -549,8 +556,16 @@ void select_device_handle(void)
         sprintf(sp.page_mcs_list.menu.title, "Dump %s saves", sditem->printdev);
         screen_page_change(SPT_MCS_LIST); 
         break;
+        case SPT_DUMP:
+        sp.page_dump.dump.buf = (const uint8_t*)0xBFC00000;
+        sp.page_dump.dump.bufsize = 0x80000;
+        sp.page_dump.show = &dump_buf_show;
+        sp.page_dump.dump.back = SPT_SELECT_DEVICE;
+        screen_page_change(SPT_DUMP); 
+        break;
         case SPT_DBG_FONT:
-        screen_page_change(SPT_DBG_FONT);
+        case SPT_CREDITS:
+        screen_page_change(sditem->changeto);
         break;
         default:
         sp.page_select_device.menu.status = "Invalid menu item";
@@ -667,7 +682,7 @@ void dump_exit(void)
 {
     setRGB0(&draw[0], 50, 50, 50);
     setRGB0(&draw[1], 50, 50, 50);
-    screen_page_change(SPT_MCS_LIST);
+    screen_page_change(sp.page_dump.dump.back);
 }
 
 static inline void dump_show(void)
@@ -770,6 +785,14 @@ void dump_buf_start(void)
     dump->exit();
 }
 
+void dump_buf_show(void)
+{
+    dump_show();
+    sp.page_dump.on_vsync = &dump_buf_start;
+    sp.page_dump.dump.statustext = "Dump from buf";    
+    output_status(sp.page_dump.dump.statustext); 
+}
+
 void mcs_list_load(void)
 {
     sp.page_mcs_list.menu.loaded = true;
@@ -828,10 +851,11 @@ void mcs_list_handle(void)
     sprintf(sp.page_dump.dump.filename, "%s%s", item->mcslist.devnumber, item->label);
     sp.page_dump.dump.read_bytes_left = item->mcslist.filesize;
     sp.page_dump.show = &dump_file_show;
+    sp.page_dump.dump.back = SPT_MCS_LIST;
     screen_page_change(SPT_DUMP);
 }
 
-void dbg_font_show(void)
+void nop_show(void)
 {
 
 }
@@ -844,6 +868,24 @@ void dbg_font_on_vsync(void)
         return;
     }
     dumpfont();
+}
+
+void credits_on_vsync(void)
+{
+    if(new_buttons_pressed(BTN_CROSS) || new_buttons_pressed(BTN_TRIANGLE))
+    {
+        screen_page_change(SPT_SELECT_DEVICE);
+        return;    
+    }    
+
+    uint16_t x = 10;
+    uint16_t y = 80;
+    print_text_at("G4Vi", x, y, true);
+    y += 20;
+    const char *socram8888 = "socram8888";
+    print_text_at(socram8888, x, y, true);
+    print_text_at("- BIOS charset stuff", x+(10*(strlen(socram8888)+1)), y, false);
+    y += 20;
 }
 
 int main(void)
@@ -864,9 +906,16 @@ int main(void)
     sp.page_select_device.menu.items[1].selectdevice.devnumber = "bu10:";
     sp.page_select_device.menu.items[1].selectdevice.printdev = "mc1";
 
-    strcpy(sp.page_select_device.menu.items[2].label, "test font");
-    sp.page_select_device.menu.items[2].selectdevice.changeto = SPT_DBG_FONT;
-    sp.page_select_device.menu.count = 3;
+    strcpy(sp.page_select_device.menu.items[2].label, "Dump bios");
+    sp.page_select_device.menu.items[2].selectdevice.changeto = SPT_DUMP;
+
+    strcpy(sp.page_select_device.menu.items[3].label, "test font");
+    sp.page_select_device.menu.items[3].selectdevice.changeto = SPT_DBG_FONT;
+
+    strcpy(sp.page_select_device.menu.items[4].label, "Credits");
+    sp.page_select_device.menu.items[4].selectdevice.changeto = SPT_CREDITS;
+
+    sp.page_select_device.menu.count = 5;
 
     sp.page_mcs_list.show = &mcs_list_show;    
     sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
@@ -874,8 +923,12 @@ int main(void)
     sp.page_mcs_list.menu.loaded = false;
     sp.page_mcs_list.menu.count = 0;
 
-    sp.page_dbg_font.show = &dbg_font_show;
+    sp.page_dbg_font.show = &nop_show;
     sp.page_dbg_font.on_vsync = &dbg_font_on_vsync;
+
+    sp.page_credits.show = &nop_show;
+    sp.page_credits.on_vsync = &credits_on_vsync;
+
 
     init();
     InitPAD( padbuff[0], 34, padbuff[1], 34 );
@@ -883,7 +936,6 @@ int main(void)
     padbuff[1][0] = padbuff[1][1] = 0xff;
     StartPAD();
     
-    //screen_page_change(SPT_SELECT_DEVICE);
     sp.current = SPT_SELECT_DEVICE;
     sp.curpage = &sp.page_select_device;   
     
