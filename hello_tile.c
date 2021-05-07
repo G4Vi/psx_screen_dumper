@@ -363,13 +363,26 @@ typedef enum {
 
 typedef struct {
     const char *devnumber;
+    const char *filename;
     size_t filesize;    
 } MCS_LIST_ITEM_EXTRADATA;
 
+typedef struct SCREEN_PAGE SCREEN_PAGE;
 typedef struct {
-    SCREEN_PAGE_TYPE changeto;
-    const char *devnumber;
-    const char *printdev;
+    SCREEN_PAGE *changeto;
+    union {
+        // mcs list extradata
+        struct {
+            const char *devnumber;
+            const char *printdev;
+        };
+        // dump buf extradata
+        struct {
+            const uint8_t *buf;
+            const size_t bufsize;
+        };
+    };
+    
 } SELECT_DEVICE_ITEM_EXTRADATA;
 
 typedef struct {
@@ -420,7 +433,7 @@ typedef struct {
 
 typedef struct SCREEN_PAGE{
     SCREEN_PAGE_TYPE current;
-    void (*show)(void);
+    void (*init)(const void*);
     void (*draw)(void);
     void (*on_vsync)(void);
     struct SCREEN_PAGE *back;
@@ -453,17 +466,11 @@ static inline void sp_set(SCREEN_PAGE *new)
     sp.curpage = new;
 }
 
-void sp_show(SCREEN_PAGE *new)
+void sp_init_page(SCREEN_PAGE *new)
 {
     new->back = sp.curpage;
-    sp_set(new);    
-    sp.curpage->show();
+    sp_set(new);
 }
-
-/*
-void sp_init_page(SCREEN_PAGE *page) {
-    page->show 
-}*/
 
 void sp_exit(void)
 {
@@ -489,7 +496,9 @@ static inline void menu_select_device_add_item(MENU *menu, const char *label, co
 
 static inline void menu_mcs_list_add_item(MENU *menu, const char *label, const MCS_LIST_ITEM_EXTRADATA *extradata)
 {
-    memcpy(&(menu_add_item(menu, label))->mcslist, extradata, sizeof(*extradata));
+    MENUITEM *item = menu_add_item(menu, label);
+    memcpy(&item->mcslist, extradata, sizeof(*extradata));
+    item->mcslist.filename = item->label;
 }
 
 void menu_draw(void)
@@ -522,7 +531,7 @@ void menu_draw(void)
     }
 }
 
-void menu_show(void) {
+void menu_init(void) {
     MENU *menu = &sp.curpage->menu;
     menu->count = 0;
     menu->index = 0;
@@ -577,33 +586,12 @@ void menu_on_vsync(void)
     menu_draw();       
 }
 
-void dump_buf_show(void);
+void dump_buf_init(const void *param);
+void mcs_list_init(const void *param);
 void select_device_handle(void)
 {
     const SELECT_DEVICE_ITEM_EXTRADATA *sditem = &sp.page_select_device.menu.items[sp.page_select_device.menu.index].selectdevice;
-    switch(sditem->changeto)
-    {
-        case SPT_MCS_LIST:
-        sp.page_mcs_list.menu.mde.devnumber = sditem->devnumber;
-        sprintf(sp.page_mcs_list.menu.title, "Dump %s saves", sditem->printdev);
-        sp_show(&sp.page_mcs_list);
-        break;
-        case SPT_DUMP:
-        sp.page_dump.dump.buf = (const uint8_t*)0xBFC00000;
-        sp.page_dump.dump.bufsize = 0x80000;
-        sp.page_dump.show = &dump_buf_show;
-        sp_show(&sp.page_dump);
-        break;
-        case SPT_DBG_FONT:
-        sp_show(&sp.page_dbg_font);
-        break;
-        case SPT_CREDITS:
-        sp_show(&sp.page_credits);
-        break;
-        default:
-        sp.page_select_device.menu.status = "Invalid menu item";
-        break;
-    }      
+    sditem->changeto->init(sditem);  
 }
 
 void dump_frame(void)
@@ -718,7 +706,7 @@ void dump_exit(void)
     sp_exit();
 }
 
-static inline void dump_show(void)
+static inline void dump_init(void)
 {
     DUMP *dump = &sp.page_dump.dump;
     sp.page_dump.exit = &dump_exit;
@@ -792,8 +780,12 @@ void dump_file_open(void)
     output_status(dump->statustext);
 }
 
-void dump_file_show(void) {
-    dump_show();
+void dump_file_init(const void *param) {
+    const MCS_LIST_ITEM_EXTRADATA *ed = param;
+    sp_init_page(&sp.page_dump);
+    sprintf(sp.page_dump.dump.filename, "%s%s", ed->devnumber, ed->filename);
+    sp.page_dump.dump.read_bytes_left = ed->filesize;    
+    dump_init();
     sp.page_dump.on_vsync = &dump_file_open;
     sp.page_dump.dump.statustext = "Opening file";    
     output_status(sp.page_dump.dump.statustext);    
@@ -818,9 +810,14 @@ void dump_buf_start(void)
     sp.page_dump.exit();
 }
 
-void dump_buf_show(void)
+void dump_buf_init(const void *param)
 {
-    dump_show();
+    const SELECT_DEVICE_ITEM_EXTRADATA *sd_extradata = param;
+    sp_init_page(&sp.page_dump);
+    sp.page_dump.dump.buf = sd_extradata->buf;
+    sp.page_dump.dump.bufsize = sd_extradata->bufsize;
+        
+    dump_init();
     sp.page_dump.on_vsync = &dump_buf_start;
     sp.page_dump.dump.statustext = "Dump from buf";    
     output_status(sp.page_dump.dump.statustext); 
@@ -880,25 +877,31 @@ void mcs_list_preload(void)
     sp.page_mcs_list.on_vsync = &mcs_list_load;
 }
 
-void mcs_list_show(void)
+void mcs_list_init(const void *param)
 {
+    const SELECT_DEVICE_ITEM_EXTRADATA *sditem = param;
+    sp_init_page(&sp.page_mcs_list);
+    sp.page_mcs_list.menu.mde.devnumber = sditem->devnumber;
+    sprintf(sp.page_mcs_list.menu.title, "Dump %s saves", sditem->printdev);        
     sp.page_mcs_list.menu.status = "Reading MC files";    
-    menu_show();
+    menu_init();
     sp.page_mcs_list.on_vsync = &mcs_list_preload;
 }
 
 void mcs_list_handle(void)
 {
     const MENUITEM *item = &sp.page_mcs_list.menu.items[sp.page_mcs_list.menu.index];
-    sprintf(sp.page_dump.dump.filename, "%s%s", item->mcslist.devnumber, item->label);
-    sp.page_dump.dump.read_bytes_left = item->mcslist.filesize;
-    sp.page_dump.show = &dump_file_show;
-    sp_show(&sp.page_dump);
+    dump_file_init(&item->mcslist);
 }
 
 void nop(void)
 {
 
+}
+
+void dbg_font_init(const void *param)
+{
+    sp_init_page(&sp.page_dbg_font);
 }
 
 void dbg_font_on_vsync(void)
@@ -909,6 +912,11 @@ void dbg_font_on_vsync(void)
         return;
     }
     dumpfont();
+}
+
+void credits_init(const void *param)
+{
+    sp_init_page(&sp.page_credits);
 }
 
 void credits_on_vsync(void)
@@ -932,7 +940,6 @@ void credits_on_vsync(void)
 int main(void)
 {   
     sp.page_select_device.current = SPT_SELECT_DEVICE;
-    sp.page_select_device.show = &menu_show;
     sp.page_select_device.draw = &menu_draw;
     sp.page_select_device.on_vsync = &menu_on_vsync;
     sp.page_select_device.back = NULL;
@@ -941,45 +948,48 @@ int main(void)
     strcpy(sp.page_select_device.menu.title, "PSX Screen Dumper");
 
     menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc0 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = SPT_MCS_LIST,
+        .changeto = &sp.page_mcs_list,
         .devnumber = "bu00:",
         .printdev = "mc0"
     });
 
     menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc1 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = SPT_MCS_LIST,
+        .changeto = &sp.page_mcs_list,
         .devnumber = "bu10:",
         .printdev = "mc1"
     });
 
     menu_select_device_add_item(&sp.page_select_device.menu, "Dump bios", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = SPT_DUMP
+        .changeto = &sp.page_dump,
+        .buf = (const uint8_t*)0xBFC00000,
+        .bufsize = 0x80000
     });
 
     menu_select_device_add_item(&sp.page_select_device.menu, "test font", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = SPT_DBG_FONT
+        .changeto = &sp.page_dbg_font
     });
 
     menu_select_device_add_item(&sp.page_select_device.menu, "Credits", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = SPT_CREDITS
+        .changeto = &sp.page_credits
     });   
 
     sp.page_mcs_list.current = SPT_MCS_LIST;
-    sp.page_mcs_list.show = &mcs_list_show;    
+    sp.page_mcs_list.init = &mcs_list_init;
     sp.page_mcs_list.exit = &menu_exit;
     sp.page_mcs_list.menu.handle = &mcs_list_handle;
     sp.page_mcs_list.menu.count = 0;
     sp.page_mcs_list.draw = &menu_draw;
 
+    sp.page_dump.init = &dump_buf_init;
     sp.page_dump.current = SPT_DUMP;
 
     sp.page_dbg_font.current = SPT_DBG_FONT;
-    sp.page_dbg_font.show = &nop;
+    sp.page_dbg_font.init = &dbg_font_init;
     sp.page_dbg_font.on_vsync = &dbg_font_on_vsync;
     sp.page_dbg_font.exit = &sp_exit;
 
     sp.page_credits.current = SPT_CREDITS;
-    sp.page_credits.show = &nop;
+    sp.page_credits.init = &credits_init;
     sp.page_credits.on_vsync = &credits_on_vsync;
     sp.page_credits.exit = &sp_exit;
 
