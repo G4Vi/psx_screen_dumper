@@ -119,7 +119,7 @@ void decompressfont() {
 
 			// GPU_dw takes units in 16bpp units, so we have to scale by 1/4
             setRECT(&currentrect, FONT_X + tablex * CHAR_WIDTH * 4 / 16, tabley * CHAR_HEIGHT, CHAR_WIDTH * 4 / 16, CHAR_HEIGHT);
-            LoadImage(&currentrect, charbuf);
+            LoadImage(&currentrect, (u_long*)charbuf);
 		}
 	}
 }
@@ -222,7 +222,7 @@ void init(void)
     RECT currentrect;
     setRECT(&currentrect, CLUT_X, CLUT_Y, 16, 1);
     static const uint16_t PALETTE[16] = { 0x0000, 0x0842, 0x1084, 0x18C6, 0x2108, 0x294A, 0x318C, 0x39CE, 0x4631, 0x4E73, 0x56B5, 0x5EF7, 0x6739, 0x6F7B, 0x77BD, 0x7FFF };
-    LoadImage(&currentrect, &PALETTE);
+    LoadImage(&currentrect, (u_long*)&PALETTE);
     const uint16_t tpage = getTPage(0, 0, FONT_X, 0);
     setDrawTPage(&fonttpage[0], 0, 0, tpage);
     setDrawTPage(&fonttpage[1], 0, 0, tpage);
@@ -388,8 +388,6 @@ typedef struct {
     uint16_t count;
     uint16_t index;
     void(*handle)(void);
-    SCREEN_PAGE_TYPE back;
-    bool loaded;
     union {
         MENU_DIRECTORY_EXTRADATA mde;
     };
@@ -399,9 +397,7 @@ typedef struct {
 } MENU;
 
 
-typedef struct {
-    SCREEN_PAGE_TYPE back;
-    void (*exit)(void);
+typedef struct {    
     const char *statustext;
     const uint8_t *buf;
     size_t bufsize;
@@ -422,9 +418,13 @@ typedef struct {
     
 } DUMP;
 
-typedef struct {
+typedef struct SCREEN_PAGE{
+    SCREEN_PAGE_TYPE current;
     void (*show)(void);
+    void (*draw)(void);
     void (*on_vsync)(void);
+    struct SCREEN_PAGE *back;
+    void (*exit)(void);
 
     union {
         MENU menu;
@@ -433,9 +433,8 @@ typedef struct {
 
 } SCREEN_PAGE;
 
-typedef struct {
-    SCREEN_PAGE_TYPE current;
-    SCREEN_PAGE_TYPE last;
+typedef struct {    
+    SCREEN_PAGE *curpage;
 
     SCREEN_PAGE page_select_device;
     SCREEN_PAGE page_mcs_list;
@@ -443,39 +442,57 @@ typedef struct {
     SCREEN_PAGE page_dbg_font;
     SCREEN_PAGE page_credits;
 
-    SCREEN_PAGE *curpage;
+    
 } SCREEN_PAGES;
 
 
 SCREEN_PAGES sp;
 
-void screen_page_change(const SCREEN_PAGE_TYPE new)
+static inline void sp_set(SCREEN_PAGE *new)
 {
-    sp.current = new;
-    switch(new)
-    {
-        case SPT_SELECT_DEVICE:
-        sp.curpage = &sp.page_select_device;        
-        break;
-        case SPT_MCS_LIST:
-        sp.curpage = &sp.page_mcs_list;
-        break;
-        case SPT_DUMP:
-        sp.curpage = &sp.page_dump;
-        break;
-        case SPT_DBG_FONT:
-        sp.curpage = &sp.page_dbg_font;
-        break;
-        case SPT_CREDITS:
-        sp.curpage = &sp.page_credits;
-        break;
-    }
+    sp.curpage = new;
+}
+
+void sp_show(SCREEN_PAGE *new)
+{
+    new->back = sp.curpage;
+    sp_set(new);    
     sp.curpage->show();
 }
 
+/*
+void sp_init_page(SCREEN_PAGE *page) {
+    page->show 
+}*/
 
+void sp_exit(void)
+{
+    sp_set(sp.curpage->back);
+    sp.curpage->draw();
+}
 
-void menu_show(void)
+static inline MENUITEM *menu_add_item(MENU *menu, const char *label)
+{    
+    if(menu->count >= 15)
+    {
+        static MENUITEM throwaway;
+        return &throwaway;
+    }
+    strcpy(menu->items[menu->count].label, label);
+    return &menu->items[menu->count++];
+}
+
+static inline void menu_select_device_add_item(MENU *menu, const char *label, const SELECT_DEVICE_ITEM_EXTRADATA *extradata)
+{
+    memcpy(&(menu_add_item(menu, label))->selectdevice, extradata, sizeof(*extradata));
+}
+
+static inline void menu_mcs_list_add_item(MENU *menu, const char *label, const MCS_LIST_ITEM_EXTRADATA *extradata)
+{
+    memcpy(&(menu_add_item(menu, label))->mcslist, extradata, sizeof(*extradata));
+}
+
+void menu_draw(void)
 {
     MENU *menu = &sp.curpage->menu;
     // print title
@@ -499,6 +516,31 @@ void menu_show(void)
         }
         y += 20;
     }
+
+    if(menu->status != NULL) {
+        output_status(menu->status);
+    }
+}
+
+void menu_show(void) {
+    MENU *menu = &sp.curpage->menu;
+    menu->count = 0;
+    menu->index = 0;
+    menu_draw();
+}
+
+void menu_exit(void)
+{
+    MENU *menu = &sp.curpage->menu;
+    if(sp.curpage->back != NULL)
+    {
+        menu->status = NULL;
+        sp_exit();
+    }
+    else
+    {
+        menu_draw();
+    }
 }
 
 void menu_on_vsync(void)
@@ -514,16 +556,9 @@ void menu_on_vsync(void)
         }        
     }
     else if(new_buttons_pressed(BTN_TRIANGLE))
-    {
-        if(menu->back != sp.current)
-        {
-            menu->loaded = false;
-            menu->count = 0;
-            menu->index = 0;
-            menu->status = NULL;
-            screen_page_change(menu->back);
-            return;
-        }
+    {        
+        sp.curpage->exit();
+        return;
     }
     else if(new_buttons_pressed(BTN_UP))
     {
@@ -539,10 +574,7 @@ void menu_on_vsync(void)
             menu->index++;            
         }
     }
-    menu_show();
-    if(menu->status != NULL) {
-        output_status(menu->status);
-    }   
+    menu_draw();       
 }
 
 void dump_buf_show(void);
@@ -554,18 +586,19 @@ void select_device_handle(void)
         case SPT_MCS_LIST:
         sp.page_mcs_list.menu.mde.devnumber = sditem->devnumber;
         sprintf(sp.page_mcs_list.menu.title, "Dump %s saves", sditem->printdev);
-        screen_page_change(SPT_MCS_LIST); 
+        sp_show(&sp.page_mcs_list);
         break;
         case SPT_DUMP:
         sp.page_dump.dump.buf = (const uint8_t*)0xBFC00000;
         sp.page_dump.dump.bufsize = 0x80000;
         sp.page_dump.show = &dump_buf_show;
-        sp.page_dump.dump.back = SPT_SELECT_DEVICE;
-        screen_page_change(SPT_DUMP); 
+        sp_show(&sp.page_dump);
         break;
         case SPT_DBG_FONT:
+        sp_show(&sp.page_dbg_font);
+        break;
         case SPT_CREDITS:
-        screen_page_change(sditem->changeto);
+        sp_show(&sp.page_credits);
         break;
         default:
         sp.page_select_device.menu.status = "Invalid menu item";
@@ -662,7 +695,7 @@ void dump_frame(void)
     return;
 
     dump_frame_cleanup:
-    dump->exit();
+    sp.page_dump.exit();
 }
 
 void dump_start(DUMP *dump, const uint16_t fullframecnt)
@@ -682,13 +715,13 @@ void dump_exit(void)
 {
     setRGB0(&draw[0], 50, 50, 50);
     setRGB0(&draw[1], 50, 50, 50);
-    screen_page_change(sp.page_dump.dump.back);
+    sp_exit();
 }
 
 static inline void dump_show(void)
 {
     DUMP *dump = &sp.page_dump.dump;
-    dump->exit = &dump_exit;
+    sp.page_dump.exit = &dump_exit;
     dump->statustext = "";
 }
 
@@ -717,7 +750,7 @@ void dump_file_start(void)
     return;
 
     dump_file_start_cleanup:
-    dump->exit();
+    sp.page_dump.exit();
 }
 
 void dump_file_sleep2(void)
@@ -750,10 +783,10 @@ void dump_file_open(void)
     dump->fd = open(dump->filename, 0x1);
     if(dump->fd < 0) {
         printf("Failed to open file\n");
-        dump->exit();
+        sp.page_dump.exit();
         return;
     }
-    dump->exit = &dump_file_exit;
+    sp.page_dump.exit = &dump_file_exit;
     dump->sleep_frames = 6;
     sp.page_dump.on_vsync = &dump_file_sleep;
     output_status(dump->statustext);
@@ -782,7 +815,7 @@ void dump_buf_start(void)
     return;
 
     dump_buf_start_cleanup:
-    dump->exit();
+    sp.page_dump.exit();
 }
 
 void dump_buf_show(void)
@@ -795,7 +828,11 @@ void dump_buf_show(void)
 
 void mcs_list_load(void)
 {
-    sp.page_mcs_list.menu.loaded = true;
+    if(new_buttons_pressed(BTN_TRIANGLE))
+    {        
+        sp.curpage->exit();
+        return;
+    }
     sp.page_mcs_list.on_vsync = &menu_on_vsync;
 
     InitCARD(1);
@@ -815,35 +852,40 @@ void mcs_list_load(void)
     do {
         file.name[19] = '\0';
         printf("file %s size %u\n", file.name, file.size);
-        sprintf(sp.page_mcs_list.menu.items[i].label, "%s", file.name);
-        sp.page_mcs_list.menu.items[i].mcslist.devnumber = sp.page_mcs_list.menu.mde.devnumber;
-        sp.page_mcs_list.menu.items[i].mcslist.filesize = file.size;
+        menu_mcs_list_add_item(&sp.page_mcs_list.menu, file.name, &(MCS_LIST_ITEM_EXTRADATA) {
+            .devnumber = sp.page_mcs_list.menu.mde.devnumber,
+            .filesize = file.size
+        });
         i++;
     } while(nextfile(&file) != NULL);
-    sp.page_mcs_list.menu.count = i;
     if(i == 0) {
         sp.page_mcs_list.menu.status = "No save files found!";
     }
+    else {
+        sp.page_mcs_list.menu.status = NULL;
+    }
 
 mcs_list_load_exit:
-    menu_on_vsync();    
+    menu_draw();
 }
 
-void mcs_list_once(void)
+void mcs_list_preload(void)
 {
+    if(new_buttons_pressed(BTN_TRIANGLE))
+    {        
+        sp.curpage->exit();
+        return;
+    }
+    menu_draw();    
     sp.page_mcs_list.on_vsync = &mcs_list_load;
 }
 
 void mcs_list_show(void)
 {
+    sp.page_mcs_list.menu.status = "Reading MC files";    
     menu_show();
-    output_status("Reading MC files");
-    if(!sp.page_mcs_list.menu.loaded)
-    {
-        sp.page_mcs_list.on_vsync = &mcs_list_once;
-    }
+    sp.page_mcs_list.on_vsync = &mcs_list_preload;
 }
-
 
 void mcs_list_handle(void)
 {
@@ -851,11 +893,10 @@ void mcs_list_handle(void)
     sprintf(sp.page_dump.dump.filename, "%s%s", item->mcslist.devnumber, item->label);
     sp.page_dump.dump.read_bytes_left = item->mcslist.filesize;
     sp.page_dump.show = &dump_file_show;
-    sp.page_dump.dump.back = SPT_MCS_LIST;
-    screen_page_change(SPT_DUMP);
+    sp_show(&sp.page_dump);
 }
 
-void nop_show(void)
+void nop(void)
 {
 
 }
@@ -864,7 +905,7 @@ void dbg_font_on_vsync(void)
 {
     if(new_buttons_pressed(BTN_CROSS) || new_buttons_pressed(BTN_TRIANGLE))
     {
-        screen_page_change(SPT_SELECT_DEVICE);
+        sp.curpage->exit();        
         return;
     }
     dumpfont();
@@ -874,7 +915,7 @@ void credits_on_vsync(void)
 {
     if(new_buttons_pressed(BTN_CROSS) || new_buttons_pressed(BTN_TRIANGLE))
     {
-        screen_page_change(SPT_SELECT_DEVICE);
+        sp.curpage->exit();
         return;    
     }    
 
@@ -890,53 +931,65 @@ void credits_on_vsync(void)
 
 int main(void)
 {   
+    sp.page_select_device.current = SPT_SELECT_DEVICE;
     sp.page_select_device.show = &menu_show;
-    sp.page_select_device.on_vsync = &menu_on_vsync;    
-    sp.page_select_device.menu.back = SPT_SELECT_DEVICE;
+    sp.page_select_device.draw = &menu_draw;
+    sp.page_select_device.on_vsync = &menu_on_vsync;
+    sp.page_select_device.back = NULL;
+    sp.page_select_device.exit = &menu_exit;
     sp.page_select_device.menu.handle = &select_device_handle;
     strcpy(sp.page_select_device.menu.title, "PSX Screen Dumper");
 
-    strcpy(sp.page_select_device.menu.items[0].label, "Dump mc0 saves");
-    sp.page_select_device.menu.items[0].selectdevice.changeto = SPT_MCS_LIST;
-    sp.page_select_device.menu.items[0].selectdevice.devnumber = "bu00:";
-    sp.page_select_device.menu.items[0].selectdevice.printdev = "mc0";
+    menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc0 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
+        .changeto = SPT_MCS_LIST,
+        .devnumber = "bu00:",
+        .printdev = "mc0"
+    });
 
-    strcpy(sp.page_select_device.menu.items[1].label, "Dump mc1 saves");
-    sp.page_select_device.menu.items[1].selectdevice.changeto = SPT_MCS_LIST;
-    sp.page_select_device.menu.items[1].selectdevice.devnumber = "bu10:";
-    sp.page_select_device.menu.items[1].selectdevice.printdev = "mc1";
+    menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc1 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
+        .changeto = SPT_MCS_LIST,
+        .devnumber = "bu10:",
+        .printdev = "mc1"
+    });
 
-    strcpy(sp.page_select_device.menu.items[2].label, "Dump bios");
-    sp.page_select_device.menu.items[2].selectdevice.changeto = SPT_DUMP;
+    menu_select_device_add_item(&sp.page_select_device.menu, "Dump bios", &(SELECT_DEVICE_ITEM_EXTRADATA){
+        .changeto = SPT_DUMP
+    });
 
-    strcpy(sp.page_select_device.menu.items[3].label, "test font");
-    sp.page_select_device.menu.items[3].selectdevice.changeto = SPT_DBG_FONT;
+    menu_select_device_add_item(&sp.page_select_device.menu, "test font", &(SELECT_DEVICE_ITEM_EXTRADATA){
+        .changeto = SPT_DBG_FONT
+    });
 
-    strcpy(sp.page_select_device.menu.items[4].label, "Credits");
-    sp.page_select_device.menu.items[4].selectdevice.changeto = SPT_CREDITS;
+    menu_select_device_add_item(&sp.page_select_device.menu, "Credits", &(SELECT_DEVICE_ITEM_EXTRADATA){
+        .changeto = SPT_CREDITS
+    });   
 
-    sp.page_select_device.menu.count = 5;
-
+    sp.page_mcs_list.current = SPT_MCS_LIST;
     sp.page_mcs_list.show = &mcs_list_show;    
-    sp.page_mcs_list.menu.back = SPT_SELECT_DEVICE;
+    sp.page_mcs_list.exit = &menu_exit;
     sp.page_mcs_list.menu.handle = &mcs_list_handle;
-    sp.page_mcs_list.menu.loaded = false;
     sp.page_mcs_list.menu.count = 0;
+    sp.page_mcs_list.draw = &menu_draw;
 
-    sp.page_dbg_font.show = &nop_show;
+    sp.page_dump.current = SPT_DUMP;
+
+    sp.page_dbg_font.current = SPT_DBG_FONT;
+    sp.page_dbg_font.show = &nop;
     sp.page_dbg_font.on_vsync = &dbg_font_on_vsync;
+    sp.page_dbg_font.exit = &sp_exit;
 
-    sp.page_credits.show = &nop_show;
+    sp.page_credits.current = SPT_CREDITS;
+    sp.page_credits.show = &nop;
     sp.page_credits.on_vsync = &credits_on_vsync;
+    sp.page_credits.exit = &sp_exit;
 
 
     init();
     InitPAD( padbuff[0], 34, padbuff[1], 34 );
     padbuff[0][0] = padbuff[0][1] = 0xff;
     padbuff[1][0] = padbuff[1][1] = 0xff;
-    StartPAD();
-    
-    sp.current = SPT_SELECT_DEVICE;
+    StartPAD();    
+
     sp.curpage = &sp.page_select_device;   
     
     while(1)
