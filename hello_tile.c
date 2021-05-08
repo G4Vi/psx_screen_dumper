@@ -1,3 +1,29 @@
+/*
+
+MIT License
+
+Copyright (c) 2021 Gavin Hayes and other psx_screen_dumper authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
 //#include <sys/types.h>
 //#include <stdio.h>
 #include <stdlib.h>
@@ -411,7 +437,8 @@ typedef struct {
 
 
 typedef struct {    
-    const char *statustext;
+    char name[24];
+    const char *statustext;    
     const uint8_t *buf;
     size_t bufsize;
     const uint8_t *readhead;
@@ -419,6 +446,8 @@ typedef struct {
     uint32_t read_bytes_left; // number of bytes available to be fetched
     int sleep_frames;
     uint16_t frameindex;
+    uint16_t framecount;
+    uint32_t crc32;
 
     uint16_t framesize;
     uint8_t startdata[6];
@@ -592,6 +621,30 @@ void select_device_handle(void)
     sditem->changeto->init(sditem);  
 }
 
+void dump_encode_frame(DUMP *dump, const uint8_t *framebuf, const const uint16_t framesize)
+{
+    // encode frameindex
+    dump->startdata[0] = dump->frameindex;
+    dump->startdata[1] = dump->frameindex >> 8;
+
+    // encode size
+    dump->startdata[4] = framesize;
+    dump->startdata[5] = framesize >> 8;
+    dump->framesize = framesize;
+
+    // encode crc32
+    const uint32_t checksum = crc32_frame(dump->startdata, FRAME_HEADER_SIZE, framebuf, framesize);
+    dump->enddata[0] = (uint8_t)(checksum);
+    dump->enddata[1] = (uint8_t)(checksum >> 8);
+    dump->enddata[2] = (uint8_t)(checksum >> 16);
+    dump->enddata[3] = (uint8_t)(checksum >> 24);
+    
+    // display for half a second
+    dump->printhead = framebuf;
+    dump->sleep_frames = 30;
+    dump->frameindex++;    
+}
+
 void dump_frame(void)
 {
     // abort if back button is pressed
@@ -607,7 +660,17 @@ void dump_frame(void)
         {
             if(dump->read_bytes_left == 0)
             {
-                goto dump_frame_cleanup;
+                if(dump->frameindex == dump->framecount)
+                {
+                    goto dump_frame_cleanup;
+                }
+                else
+                {
+                    // encode the crc32
+                    dump->crc32 = ~dump->crc32;
+                    dump_encode_frame(dump, (const uint8_t*)&dump->crc32, sizeof(uint32_t));
+                    return;
+                }                
             }
             size_t toread = (dump->read_bytes_left > dump->bufsize) ? dump->bufsize : dump->read_bytes_left;
             int32_t res = read(dump->fd, (void*)dump->buf, toread);
@@ -618,32 +681,18 @@ void dump_frame(void)
             dump->read_bytes_left -= toread;
             dump->readhead = dump->buf;
             dump->readend = dump->readhead +  toread;
-        }
+        }        
 
-        // encode frameindex
-        dump->startdata[0] = dump->frameindex;
-        dump->startdata[1] = dump->frameindex >> 8;
-
-        // encode size
+        // encode frame
         const size_t bufleft = dump->readend - dump->readhead; 
         const uint16_t thisframesize = (bufleft > FRAME_DATA_SIZE) ? FRAME_DATA_SIZE : bufleft;
-        dump->startdata[4] = thisframesize;
-        dump->startdata[5] = thisframesize >> 8;
-        dump->framesize = thisframesize;
+        dump_encode_frame(dump, dump->readhead, thisframesize);
 
-        // encode crc32
-        const uint32_t checksum = crc32_frame_ex(dump->startdata, FRAME_HEADER_SIZE, dump->readhead, thisframesize);
-        dump->enddata[0] = (uint8_t)(checksum);
-        dump->enddata[1] = (uint8_t)(checksum >> 8);
-        dump->enddata[2] = (uint8_t)(checksum >> 16);
-        dump->enddata[3] = (uint8_t)(checksum >> 24);        
+        // update running crc32
+        dump->crc32 = crc32_inner(dump->crc32, dump->readhead, thisframesize);
 
-        // display for half a second
-        dump->sleep_frames = 30;
-
-        dump->printhead = dump->readhead;
-        dump->readhead += thisframesize;
-        dump->frameindex++;
+        // advance readhead       
+        dump->readhead += thisframesize;        
     }   
 
     dump->sleep_frames--;
@@ -688,9 +737,11 @@ void dump_draw(void)
     }
 }
 
-void dump_start(DUMP *dump, const uint16_t fullframecnt)
+void dump_start(DUMP *dump, uint16_t fullframecnt)
 {
-    const uint16_t lastframeindex = fullframecnt-1;
+    fullframecnt += 2;
+    dump->framecount = fullframecnt;
+    const uint16_t lastframeindex = fullframecnt - 1;
     dump->frameindex = 0;
     dump->startdata[2] = lastframeindex;
     dump->startdata[3] = lastframeindex >> 8;
@@ -699,7 +750,10 @@ void dump_start(DUMP *dump, const uint16_t fullframecnt)
     setRGB0(&draw[1], 255, 255, 255);
     sp.page_dump.draw = &dump_draw;
     sp.page_dump.on_vsync = &dump_frame;
-    dump_frame();
+    dump_encode_frame(dump, dump->name, strlen(dump->name));
+    dump->sleep_frames--;
+
+    dump->crc32 = 0xFFFFFFFF;
 }
 
 void dump_exit(void)
@@ -795,7 +849,8 @@ void dump_file_init(const void *param) {
     const MCS_LIST_ITEM_EXTRADATA *ed = param;
     sp_init_page(&sp.page_dump);
     sprintf(sp.page_dump.dump.filename, "%s%s", ed->devnumber, ed->filename);
-    sp.page_dump.dump.read_bytes_left = ed->filesize;    
+    sp.page_dump.dump.read_bytes_left = ed->filesize;
+    strcpy(sp.page_dump.dump.name, ed->filename);    
     dump_init();
     sp.page_dump.on_vsync = &dump_file_open;
     sp.page_dump.dump.statustext = "Opening file";     
@@ -826,7 +881,7 @@ void dump_buf_init(const void *param)
     sp_init_page(&sp.page_dump);
     sp.page_dump.dump.buf = sd_extradata->buf;
     sp.page_dump.dump.bufsize = sd_extradata->bufsize;
-        
+    strcpy(sp.page_dump.dump.name, "PSX-BIOS.ROM");    
     dump_init();
     sp.page_dump.on_vsync = &dump_buf_start;
     sp.page_dump.dump.statustext = "Dump from buf";    

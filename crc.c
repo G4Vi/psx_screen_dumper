@@ -25,7 +25,7 @@ uint32_t crc32(const void * data, uint32_t len) {
     return ~crc;
 }
 
-static inline uint32_t crc32_inner(uint32_t crc, const uint8_t *bytes, uint32_t len)
+inline uint32_t crc32_inner(uint32_t crc, const uint8_t *bytes, uint32_t len)
 {
 	 while (len) {
         crc ^= *bytes;
@@ -44,22 +44,7 @@ static inline uint32_t crc32_inner(uint32_t crc, const uint8_t *bytes, uint32_t 
 	return crc;
 }
 
-uint32_t crc32_frame(const uint16_t startindex, const uint16_t endindex, const uint16_t size, const void * data)
-{
-	uint32_t crc = 0xFFFFFFFF;
-    uint8_t startdata[6];
-	startdata[0] = startindex;
-	startdata[1] = startindex >> 8;
-	startdata[2] = endindex;
-	startdata[3] = endindex >> 8;
-	startdata[4] = size;
-	startdata[5] = size >> 8;
-	crc = crc32_inner(crc, startdata, sizeof(startdata));
-	crc = crc32_inner(crc, data, size);
-	return ~crc;
-}
-
-uint32_t crc32_frame_ex(const uint8_t *startdata, const uint16_t startlen, const void * data, const uint16_t size)
+uint32_t crc32_frame(const uint8_t *startdata, const uint16_t startlen, const void * data, const uint16_t size)
 {
 	uint32_t crc = 0xFFFFFFFF;
 	crc = crc32_inner(crc, startdata, startlen);

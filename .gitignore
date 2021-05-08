@@ -8,4 +8,5 @@ cmake-build-*/
 *.cpe
 *.ps-exe
 *.exe
-
+*.dep
+*.o
