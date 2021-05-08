@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Defines the ISO project -->
+<iso_project image_name="psx_screen_dumper.iso">
+
+    <!-- Defines the data track for this tutorial -->
+    <track type="data">
+
+        <!-- Specifies identifier strings such as volume label -->
+        <!-- System and application identifiers must be PLAYSTATION -->
+        <identifiers
+            system      ="PLAYSTATION"
+            application ="PLAYSTATION"
+            volume      ="PSXSCREENDUMPER"
+            volume_set  ="PSXSCREENDUMPER"
+            publisher   ="MEIDOTEK"
+        />
+
+        <!-- Defines the directory tree of the data track -->
+        <directory_tree>
+
+            <!-- Specify files in the directory tree -->
+            <file name="system.cnf"      type="data" source="system.cnf"/>
+            <file name="psd.exe"    type="data" source="psx_screen_dumper.ps-exe"/>
+
+            <!-- Place dummy sectors at the end -->
+            <dummy sectors="1024"/>
+
+        </directory_tree>
+
+    </track>
+
+</iso_project>
