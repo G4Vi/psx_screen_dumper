@@ -461,6 +461,11 @@ typedef struct {
 
 SCREEN_PAGES sp;
 
+void nop(void)
+{
+
+}
+
 static inline void sp_set(SCREEN_PAGE *new)
 {
     sp.curpage = new;
@@ -474,8 +479,7 @@ void sp_init_page(SCREEN_PAGE *new)
 
 void sp_exit(void)
 {
-    sp_set(sp.curpage->back);
-    sp.curpage->draw();
+    sp_set(sp.curpage->back);    
 }
 
 static inline MENUITEM *menu_add_item(MENU *menu, const char *label)
@@ -535,7 +539,6 @@ void menu_init(void) {
     MENU *menu = &sp.curpage->menu;
     menu->count = 0;
     menu->index = 0;
-    menu_draw();
 }
 
 void menu_exit(void)
@@ -545,11 +548,7 @@ void menu_exit(void)
     {
         menu->status = NULL;
         sp_exit();
-    }
-    else
-    {
-        menu_draw();
-    }
+    }    
 }
 
 void menu_on_vsync(void)
@@ -582,8 +581,7 @@ void menu_on_vsync(void)
         {
             menu->index++;            
         }
-    }
-    menu_draw();       
+    }   
 }
 
 void dump_buf_init(const void *param);
@@ -646,8 +644,18 @@ void dump_frame(void)
         dump->printhead = dump->readhead;
         dump->readhead += thisframesize;
         dump->frameindex++;
-    }
+    }   
 
+    dump->sleep_frames--;
+    return;
+
+    dump_frame_cleanup:
+    sp.page_dump.exit();
+}
+
+void dump_draw(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
     // calculate the blocks
     int bitindex = 0;
     // start data
@@ -678,16 +686,10 @@ void dump_frame(void)
     {
         addPrim(ot[db], &datablocks[db][j]);
     }
-
-    dump->sleep_frames--;
-    return;
-
-    dump_frame_cleanup:
-    sp.page_dump.exit();
 }
 
 void dump_start(DUMP *dump, const uint16_t fullframecnt)
-{    
+{
     const uint16_t lastframeindex = fullframecnt-1;
     dump->frameindex = 0;
     dump->startdata[2] = lastframeindex;
@@ -695,6 +697,7 @@ void dump_start(DUMP *dump, const uint16_t fullframecnt)
 
     setRGB0(&draw[0], 255, 255, 255);
     setRGB0(&draw[1], 255, 255, 255);
+    sp.page_dump.draw = &dump_draw;
     sp.page_dump.on_vsync = &dump_frame;
     dump_frame();
 }
@@ -706,11 +709,21 @@ void dump_exit(void)
     sp_exit();
 }
 
+void dump_status_draw(void)
+{
+    DUMP *dump = &sp.page_dump.dump;
+    if(dump->statustext != NULL)
+    {
+        output_status(dump->statustext);
+    }    
+}
+
 static inline void dump_init(void)
 {
     DUMP *dump = &sp.page_dump.dump;
     sp.page_dump.exit = &dump_exit;
     dump->statustext = "";
+    sp.page_dump.draw = &dump_status_draw;
 }
 
 static uint8_t Dump_file_buf[0x2000];
@@ -755,7 +768,6 @@ void dump_file_sleep(void)
         dump->statustext = "Starting file dump";
         sp.page_dump.on_vsync = &dump_file_sleep2;
     }    
-    output_status(dump->statustext);
 }
 
 void dump_file_exit(void)
@@ -777,7 +789,6 @@ void dump_file_open(void)
     sp.page_dump.exit = &dump_file_exit;
     dump->sleep_frames = 6;
     sp.page_dump.on_vsync = &dump_file_sleep;
-    output_status(dump->statustext);
 }
 
 void dump_file_init(const void *param) {
@@ -787,8 +798,7 @@ void dump_file_init(const void *param) {
     sp.page_dump.dump.read_bytes_left = ed->filesize;    
     dump_init();
     sp.page_dump.on_vsync = &dump_file_open;
-    sp.page_dump.dump.statustext = "Opening file";    
-    output_status(sp.page_dump.dump.statustext);    
+    sp.page_dump.dump.statustext = "Opening file";     
 }
 
 // buf and bufsize must be set
@@ -820,7 +830,6 @@ void dump_buf_init(const void *param)
     dump_init();
     sp.page_dump.on_vsync = &dump_buf_start;
     sp.page_dump.dump.statustext = "Dump from buf";    
-    output_status(sp.page_dump.dump.statustext); 
 }
 
 void mcs_list_load(void)
@@ -843,7 +852,7 @@ void mcs_list_load(void)
     if(firstfile(tosearch, &file) == NULL)
     {        
         sp.page_mcs_list.menu.status = "firstfile failed";
-        goto mcs_list_load_exit;
+        return;
     }
     int i = 0;
     do {
@@ -861,9 +870,6 @@ void mcs_list_load(void)
     else {
         sp.page_mcs_list.menu.status = NULL;
     }
-
-mcs_list_load_exit:
-    menu_draw();
 }
 
 void mcs_list_preload(void)
@@ -872,8 +878,7 @@ void mcs_list_preload(void)
     {        
         sp.curpage->exit();
         return;
-    }
-    menu_draw();    
+    }   
     sp.page_mcs_list.on_vsync = &mcs_list_load;
 }
 
@@ -894,11 +899,6 @@ void mcs_list_handle(void)
     dump_file_init(&item->mcslist);
 }
 
-void nop(void)
-{
-
-}
-
 void dbg_font_init(const void *param)
 {
     sp_init_page(&sp.page_dbg_font);
@@ -910,7 +910,11 @@ void dbg_font_on_vsync(void)
     {
         sp.curpage->exit();        
         return;
-    }
+    }    
+}
+
+void dbg_font_draw(void)
+{
     dumpfont();
 }
 
@@ -925,8 +929,11 @@ void credits_on_vsync(void)
     {
         sp.curpage->exit();
         return;    
-    }    
+    }   
+}
 
+void credits_draw(void)
+{
     uint16_t x = 10;
     uint16_t y = 80;
     print_text_at("G4Vi", x, y, true);
@@ -982,14 +989,17 @@ int main(void)
 
     sp.page_dump.init = &dump_buf_init;
     sp.page_dump.current = SPT_DUMP;
+    sp.page_dump.draw = &nop;
 
     sp.page_dbg_font.current = SPT_DBG_FONT;
     sp.page_dbg_font.init = &dbg_font_init;
+    sp.page_dbg_font.draw = &dbg_font_draw;
     sp.page_dbg_font.on_vsync = &dbg_font_on_vsync;
     sp.page_dbg_font.exit = &sp_exit;
 
     sp.page_credits.current = SPT_CREDITS;
     sp.page_credits.init = &credits_init;
+    sp.page_credits.draw = &credits_draw;
     sp.page_credits.on_vsync = &credits_on_vsync;
     sp.page_credits.exit = &sp_exit;
 
@@ -1007,6 +1017,7 @@ int main(void)
         fontSPRT = &font[db][0];    
         ClearOTagR(ot[db], OTLEN);
         sp.curpage->on_vsync();
+        sp.curpage->draw();
         addPrim(ot[db], &fonttpage[db]);
         lastpad = *(PADTYPE*)padbuff[0];
         DrawSync(0);
