@@ -1,7 +1,7 @@
-TARGET = cube
+TARGET = psx_screen_dumper
 TYPE = ps-exe
 
-SRCS = hello_tile.c \
+SRCS = psx_screen_dumper.c \
 crc.c \
 ../common/crt0/crt0.s \
 
