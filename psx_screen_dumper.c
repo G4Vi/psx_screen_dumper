@@ -687,9 +687,8 @@ void dump_encode_frame(DUMP *dump, const uint8_t *framebuf, const const uint16_t
     dump->enddata[2] = (uint8_t)(checksum >> 16);
     dump->enddata[3] = (uint8_t)(checksum >> 24);
     
-    // display for half a second
     dump->printhead = framebuf;
-    dump->sleep_frames = 30;
+    dump->sleep_frames = 10;
     dump->frameindex++;    
 }
 
@@ -751,8 +750,14 @@ void dump_frame(void)
 }
 
 void dump_draw(void)
-{
+{    
+
     DUMP *dump = &sp.page_dump.dump;
+
+    char fstring[6];
+    sprintf(fstring, "%u", dump->frameindex-1);
+    print_text_at(fstring, 10, 10, false);
+
     // calculate the blocks
     int bitindex = 0;
     // start data
@@ -968,12 +973,12 @@ void mcs_list_load(void)
         i++;
     } while(nextfile(&file) != NULL);
 
-    for(; i < 15; i++) {
+    /*for(; i < 15; i++) {
         menu_mcs_list_add_item(&sp.page_mcs_list.menu, "dummy", &(MCS_LIST_ITEM_EXTRADATA) {
             .devnumber = sp.page_mcs_list.menu.mde.devnumber,
             .filesize = file.size
         });
-    }
+    }*/
 
     if(i == 0) {
         sp.page_mcs_list.menu.status = "No save files found!";
