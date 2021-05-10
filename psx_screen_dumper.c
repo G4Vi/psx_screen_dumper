@@ -32,6 +32,17 @@ SOFTWARE.
 #include <stdbool.h>
 #include <string.h>
 
+#define max(a,b) \
+       ({ typeof (a) _a = (a); \
+           typeof (b) _b = (b); \
+         _a > _b ? _a : _b; })
+
+#define min(a,b) \
+       ({ typeof (a) _a = (a); \
+           typeof (b) _b = (b); \
+         _a < _b ? _a : _b; })
+
+
 #include <libgte.h>
 #include <libetc.h>
 #include <libgpu.h>
@@ -49,6 +60,10 @@ SOFTWARE.
 #define MAXENDX   315
 #define MAXENDY   230
 // end data dumper settings
+
+// when enabled, when scrolled past the last item in either direction, draw multiple new items
+// when not enabled only show the new item
+#define MENU_MIDNIDGHTCOMMANDER
 
 #define MARGINX 0            // margins for text display
 #define MARGINY 32
@@ -426,6 +441,7 @@ typedef struct {
 typedef struct {
     uint16_t count;
     uint16_t index;
+    uint16_t starti;
     void(*handle)(void);
     union {
         MENU_DIRECTORY_EXTRADATA mde;
@@ -543,11 +559,30 @@ void menu_draw(void)
     uint16_t xtitle = centerx - ((strlen(titletext)/2)*(CHAR_WIDTH+1));
     print_text_at(titletext, xtitle, 20, true);
 
+    
+    // determine the range of menu items to draw
+    uint16_t y = 50;    
+    uint16_t count = min(8, menu->count);
+    #ifndef MENU_MIDNIDGHTCOMMANDER
+    uint16_t starti = max(0, menu->index-7);   
+    #else
+    if(menu->index < menu->starti)
+    {
+        menu->starti = max(menu->index-3, 0);
+        
+    }
+    else if (menu->index > (menu->starti+7))
+    {
+        menu->starti = min(menu->index-3, menu->count-8);
+    }
+    uint16_t starti = menu->starti;
+    #endif
+    
     // draw the menu items
+    uint16_t pastindex = starti+count;    
     uint16_t x = 20;
-    uint16_t centery = (SCREENYRES / 2)-(CHAR_HEIGHT/2);
-    uint16_t y = centery - ((menu->count/2) * 20);    
-    for(int i = 0; i < menu->count; i++)
+    uint16_t centery = ((SCREENYRES-y) / 2)-(CHAR_HEIGHT/2)+y;
+    for(int i = starti; i < pastindex; i++)
     {        
         print_text_at(menu->items[i].label, x, y, true);
         if(i == menu->index)
@@ -559,6 +594,18 @@ void menu_draw(void)
         y += 20;
     }
 
+    /*for(int i = 0; i < menu->count; i++)
+    {        
+        print_text_at(menu->items[i].label, x, y, true);
+        if(i == menu->index)
+        {
+            setXY0(&menu_selected[db], 0, y-2);
+            setWH(&menu_selected[db], SCREENXRES, 20);
+            addPrim(ot[db], &menu_selected[db]);
+        }
+        y += 20;
+    }*/
+
     if(menu->status != NULL) {
         output_status(menu->status);
     }
@@ -568,6 +615,7 @@ void menu_init(void) {
     MENU *menu = &sp.curpage->menu;
     menu->count = 0;
     menu->index = 0;
+    menu->starti = 0;
 }
 
 void menu_exit(void)
@@ -919,6 +967,14 @@ void mcs_list_load(void)
         });
         i++;
     } while(nextfile(&file) != NULL);
+
+    for(; i < 15; i++) {
+        menu_mcs_list_add_item(&sp.page_mcs_list.menu, "dummy", &(MCS_LIST_ITEM_EXTRADATA) {
+            .devnumber = sp.page_mcs_list.menu.mde.devnumber,
+            .filesize = file.size
+        });
+    }
+
     if(i == 0) {
         sp.page_mcs_list.menu.status = "No save files found!";
     }

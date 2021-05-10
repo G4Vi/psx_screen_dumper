@@ -10,3 +10,4 @@ cmake-build-*/
 *.exe
 *.dep
 *.o
+*.objdump.txt

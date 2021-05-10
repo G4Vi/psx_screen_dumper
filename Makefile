@@ -32,3 +32,23 @@ LDFLAGS += -ltap
 LDFLAGS += -Wl,--end-group
 
 include ../common.mk
+
+# extension must be .exe for no$psx
+$(BINDIR)$(TARGET).exe: $(BINDIR)$(TARGET).ps-exe
+	cp $(BINDIR)$(TARGET).ps-exe $(BINDIR)$(TARGET).exe
+
+$(BINDIR)$(TARGET).objdump.txt: $(BINDIR)$(TARGET).elf
+	mipsel-linux-gnu-objdump -D $(BINDIR)$(TARGET).elf > $(BINDIR)$(TARGET).objdump.txt
+
+nocash: $(BINDIR)$(TARGET).exe $(BINDIR)$(TARGET).objdump.txt	
+
+$(BINDIR)$(TARGET).iso: $(BINDIR)$(TARGET).ps-exe psx_screen_dumper.xml
+	mkpsxiso psx_screen_dumper.xml
+
+iso: $(BINDIR)$(TARGET).iso
+
+actualclean: clean
+	rm -f $(BINDIR)$(TARGET).iso
+	rm -f $(BINDIR)$(TARGET).objdump.txt
+	
+.PHONY: nocash iso actualclean
