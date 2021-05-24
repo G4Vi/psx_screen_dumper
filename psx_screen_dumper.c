@@ -99,6 +99,7 @@ SOFTWARE.
 // END DO NOT CHANGE DIRECTLY
 
 TILE dataframe[4];
+
 TILE datablocks[2][UCNT];
     
 DR_TPAGE fonttpage[2];
@@ -119,6 +120,16 @@ DRAWENV draw[2];
 u_long ot[2][OTLEN];          // double ordering table of length 8 * 32 = 256 bits / 32 bytes
 short db = 0;                 // index of which buffer is used, values 0, 1
 
+typedef struct {
+    DISPENV disp;
+    DRAWENV draw;
+    u_long ot[OTLEN];
+    DR_TPAGE fonttpage;
+    SPRT font[FONT_SPRT_CNT];
+    TILE menu_selected;
+    TILE datablocks[UCNT];
+
+} DB;
 
 
 void decompressfont() {
