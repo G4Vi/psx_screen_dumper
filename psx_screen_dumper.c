@@ -98,7 +98,7 @@ SOFTWARE.
 #define FRAME_DATA_SIZE   ((UCNT/8) - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
 // END DO NOT CHANGE DIRECTLY
 
-TILE dataframe[4];
+TILE dataframe[2][4];
 
 TILE datablocks[2][UCNT];
     
@@ -112,23 +112,23 @@ SPRT *fontSPRT;
 TILE menu_selected[MENU_OTLEN];
 
 
-#define OTLEN (4 + UCNT+ FONT_OTLEN + MENU_OTLEN)              // Ordering Table Length 
+#define OTLEN (4 + UCNT+ FONT_OTLEN + MENU_OTLEN)             
 
-DISPENV disp[2];             // Double buffered DISPENV and DRAWENV
+DISPENV disp[2];             
 DRAWENV draw[2];
 
-u_long ot[2][OTLEN];          // double ordering table of length 8 * 32 = 256 bits / 32 bytes
-short db = 0;                 // index of which buffer is used, values 0, 1
+u_long ot[2][OTLEN];
 
-typedef struct {
-    DISPENV disp;
-    DRAWENV draw;
-    u_long ot[OTLEN];
+uint16_t db = 0;
+typedef struct {    
     DR_TPAGE fonttpage;
     SPRT font[FONT_SPRT_CNT];
     TILE menu_selected;
+    TILE dataframe[4];
     TILE datablocks[UCNT];
-
+    u_long ot[OTLEN];
+    DISPENV disp;
+    DRAWENV draw;
 } DB;
 
 
@@ -248,26 +248,15 @@ void init(void)
         SetVideoMode(MODE_PAL);
         disp[0].screen.y += 8;
         disp[1].screen.y += 8;
-    }
-        
-    setRGB0(&draw[0], 50, 50, 50);
-    setRGB0(&draw[1], 50, 50, 50);
+    }   
     
-    draw[0].isbg = 1;
-    draw[1].isbg = 1;
-    
-    SetDispMask(1);
-
-    PutDispEnv(&disp[db]);
-    PutDrawEnv(&draw[db]);
-    
-    FntLoad(960, 0);
+    //FntLoad(960, 0);
     /*static RECT rect;
     setRECT(&rect, 960, 128, 2, 1);
     static uint32_t thedata;
     thedata = 0x7F200000;
     LoadImage(&rect, &thedata);*/
-    FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );
+    //FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );
 
     // load the font from bios
     decompressfont();
@@ -276,41 +265,45 @@ void init(void)
     static const uint16_t PALETTE[16] = { 0x0000, 0x0842, 0x1084, 0x18C6, 0x2108, 0x294A, 0x318C, 0x39CE, 0x4631, 0x4E73, 0x56B5, 0x5EF7, 0x6739, 0x6F7B, 0x77BD, 0x7FFF };
     LoadImage(&currentrect, (u_long*)&PALETTE);
     const uint16_t tpage = getTPage(0, 0, FONT_X, 0);
-    setDrawTPage(&fonttpage[0], 0, 0, tpage);
-    setDrawTPage(&fonttpage[1], 0, 0, tpage);
-
-    setTile(&menu_selected[0]);
-    setRGB0(&menu_selected[0], 0, 0, 0);
-    setTile(&menu_selected[1]);
-    setRGB0(&menu_selected[1], 0, 0, 0);
-
-    //  top
-    setTile(&dataframe[0]);
-    setXY0(&dataframe[0], STARTX, STARTY);
-    setWH(&dataframe[0], PIXW, BLOCKSIZE);
-    setRGB0(&dataframe[0], 0, 0, 0);
-
-    // bottom
-    setTile(&dataframe[1]);
-    setXY0(&dataframe[1], STARTX, ENDY-BLOCKSIZE);
-    setWH(&dataframe[1], PIXW, BLOCKSIZE);
-    setRGB0(&dataframe[1], 0, 0, 0);
-
-    // left
-    setTile(&dataframe[2]);
-    setXY0(&dataframe[2], STARTX, STARTY+BLOCKSIZE);
-    setWH(&dataframe[2], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
-    setRGB0(&dataframe[2], 0, 0, 0);
-
-    // right
-    setTile(&dataframe[3]);
-    setXY0(&dataframe[3], ENDX-BLOCKSIZE, STARTY+BLOCKSIZE);
-    setWH(&dataframe[3], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
-    setRGB0(&dataframe[3], 0, 0, 0);
-
-    // setup tiles
+    
     for(int i = 0; i < 2; i++)
     {
+        setRGB0(&draw[i], 50, 50, 50);
+        draw[i].isbg = 1;
+
+        // set font tpage
+        setDrawTPage(&fonttpage[i], 0, 0, tpage); 
+
+        // setup menu
+        setTile(&menu_selected[i]);
+        setRGB0(&menu_selected[i], 0, 0, 0);
+
+        // setup dataframe
+        //  top
+        setTile(&dataframe[i][0]);
+        setXY0(&dataframe[i][0], STARTX, STARTY);
+        setWH(&dataframe[i][0], PIXW, BLOCKSIZE);
+        setRGB0(&dataframe[i][0], 0, 0, 0);
+    
+        // bottom
+        setTile(&dataframe[i][1]);
+        setXY0(&dataframe[i][1], STARTX, ENDY-BLOCKSIZE);
+        setWH(&dataframe[i][1], PIXW, BLOCKSIZE);
+        setRGB0(&dataframe[i][1], 0, 0, 0);
+    
+        // left
+        setTile(&dataframe[i][2]);
+        setXY0(&dataframe[i][2], STARTX, STARTY+BLOCKSIZE);
+        setWH(&dataframe[i][2], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
+        setRGB0(&dataframe[i][2], 0, 0, 0);
+    
+        // right
+        setTile(&dataframe[i][3]);
+        setXY0(&dataframe[i][3], ENDX-BLOCKSIZE, STARTY+BLOCKSIZE);
+        setWH(&dataframe[i][3], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
+        setRGB0(&dataframe[i][3], 0, 0, 0);
+
+        // setup tiles
         int x = USTARTX;
         int y = USTARTY;
         for(int j = 0; j < UCNT; j++)
@@ -325,8 +318,12 @@ void init(void)
                 x = USTARTX;
                 y += BLOCKSIZE;
             }
-        }
-    }    
+        }        
+    }
+
+    SetDispMask(1);
+    PutDispEnv(&disp[db]);
+    PutDrawEnv(&draw[db]);    
 }
 
 u_char padbuff[2][34];
@@ -790,10 +787,10 @@ void dump_draw(void)
     }
 
     // draw a frame of data    
-    addPrim(ot[db], &dataframe[0]);
-    addPrim(ot[db], &dataframe[1]);
-    addPrim(ot[db], &dataframe[2]);
-    addPrim(ot[db], &dataframe[3]);
+    addPrim(ot[db], &dataframe[db][0]);
+    addPrim(ot[db], &dataframe[db][1]);
+    addPrim(ot[db], &dataframe[db][2]);
+    addPrim(ot[db], &dataframe[db][3]);
 
     for(int j = 0; j < UCNT; j++)
     {
