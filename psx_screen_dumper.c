@@ -74,6 +74,8 @@ SOFTWARE.
 #define FONT_X (SCREENXRES)
 #define CLUT_X (FONT_X)
 #define CLUT_Y (6 * CHAR_HEIGHT)
+#define CLUT2_X (CLUT_X+16)
+#define CLUT2_Y CLUT_Y
 #define FONT_COLS 16
 #define FONT_ROWS 6
 #define FONT_TEXTURES 1
@@ -97,39 +99,27 @@ SOFTWARE.
 #define FRAME_FOOTER_SIZE (sizeof(uint32_t))
 #define FRAME_DATA_SIZE   ((UCNT/8) - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
 // END DO NOT CHANGE DIRECTLY
-
-TILE dataframe[4];
-
-TILE datablocks[2][UCNT];
-    
-DR_TPAGE fonttpage[2];
+   
+#define FRAME_OTLEN 4 // 4 sides
 #define FONT_SPRT_CNT ((SCREENXRES/CHAR_WIDTH)*(SCREENYRES/CHAR_HEIGHT))
-SPRT font[2][FONT_SPRT_CNT];
-SPRT *fontSPRT;
 #define FONT_OTLEN (1 + FONT_SPRT_CNT)
-
-#define MENU_OTLEN 2
-TILE menu_selected[MENU_OTLEN];
-
-
-#define OTLEN (4 + UCNT+ FONT_OTLEN + MENU_OTLEN)              // Ordering Table Length 
-
-DISPENV disp[2];             // Double buffered DISPENV and DRAWENV
-DRAWENV draw[2];
-
-u_long ot[2][OTLEN];          // double ordering table of length 8 * 32 = 256 bits / 32 bytes
-short db = 0;                 // index of which buffer is used, values 0, 1
-
-typedef struct {
-    DISPENV disp;
-    DRAWENV draw;
-    u_long ot[OTLEN];
+#define MENU_OTLEN 1
+#define OTLEN (FRAME_OTLEN + UCNT+ FONT_OTLEN + MENU_OTLEN)        
+typedef struct {    
     DR_TPAGE fonttpage;
     SPRT font[FONT_SPRT_CNT];
     TILE menu_selected;
+    TILE dataframe[4];
     TILE datablocks[UCNT];
-
+    u_long ot[OTLEN];
+    DISPENV disp;
+    DRAWENV draw;
 } DB;
+DB fb[2];
+uint16_t db = 0;
+SPRT *fontSPRT;
+uint16_t current_font_clut[2]; // 0 is x 1 is 7
+#define CURRENT (fb[db])
 
 
 void decompressfont() {
@@ -180,7 +170,7 @@ void dumpfont(void) {
     for (uint_fast8_t tabley = 0; tabley < 6; tabley++) {
 		for (uint_fast8_t tablex = 0; tablex < 16; tablex++) {     
             SPRT *sprt = fontSPRT;       
-            //SPRT *sprt = &font[db][tablex][tabley];
+            //SPRT *sprt = &CURRENT.font[tablex][tabley];
             setSprt(sprt);
             setXY0(sprt, 10 + (tablex * 10), 10 + (tabley*17));
             setWH(sprt, CHAR_WIDTH, CHAR_HEIGHT);
@@ -191,7 +181,7 @@ void dumpfont(void) {
             setUV0(sprt, uoffs, voffs);
             setClut(sprt, CLUT_X, CLUT_Y);
             setRGB0(sprt, 128, 128, 128);
-            addPrim(ot[db], sprt);
+            addPrim(CURRENT.ot, sprt);
             fontSPRT++;
         }
     }    
@@ -214,16 +204,16 @@ void print_text_at(const char *text, int16_t x, int16_t y, bool overstrike)
             const uint16_t uoffs =  (tex_idx % 16) * CHAR_WIDTH;
             const uint16_t voffs =  (tex_idx / 16) * CHAR_HEIGHT;
             setUV0(fontSPRT, uoffs, voffs);
-            setClut(fontSPRT, CLUT_X, CLUT_Y);
+            setClut(fontSPRT, current_font_clut[0], current_font_clut[1]);
             setRGB0(fontSPRT, 128, 128, 128);
-            addPrim(ot[db], fontSPRT);
+            addPrim(CURRENT.ot, fontSPRT);
             fontSPRT++;
 
             if(overstrike)
             {
                 *fontSPRT = *(fontSPRT-1);
                 setXY0(fontSPRT, x+1, y);
-                addPrim(ot[db], fontSPRT);
+                addPrim(CURRENT.ot, fontSPRT);
                 fontSPRT++;
             }
 		}
@@ -237,96 +227,104 @@ void init(void)
 {
     ResetGraph(0);
     
-    SetDefDispEnv(&disp[0], 0, 0, SCREENXRES, SCREENYRES);
-    SetDefDispEnv(&disp[1], 0, SCREENYRES, SCREENXRES, SCREENYRES);
+    SetDefDispEnv(&fb[0].disp, 0, 0, SCREENXRES, SCREENYRES);
+    SetDefDispEnv(&fb[1].disp, 0, SCREENYRES, SCREENXRES, SCREENYRES);
     
-    SetDefDrawEnv(&draw[0], 0, SCREENYRES, SCREENXRES, SCREENYRES);
-    SetDefDrawEnv(&draw[1], 0, 0, SCREENXRES, SCREENYRES);
+    SetDefDrawEnv(&fb[0].draw, 0, SCREENYRES, SCREENXRES, SCREENYRES);
+    SetDefDrawEnv(&fb[1].draw, 0, 0, SCREENXRES, SCREENYRES);
     
     if (0)
     {
         SetVideoMode(MODE_PAL);
-        disp[0].screen.y += 8;
-        disp[1].screen.y += 8;
-    }
-        
-    setRGB0(&draw[0], 50, 50, 50);
-    setRGB0(&draw[1], 50, 50, 50);
+        fb[0].disp.screen.y += 8;
+        fb[1].disp.screen.y += 8;
+    }   
     
-    draw[0].isbg = 1;
-    draw[1].isbg = 1;
-    
-    SetDispMask(1);
-
-    PutDispEnv(&disp[db]);
-    PutDrawEnv(&draw[db]);
-    
-    FntLoad(960, 0);
+    //FntLoad(960, 0);
     /*static RECT rect;
     setRECT(&rect, 960, 128, 2, 1);
     static uint32_t thedata;
     thedata = 0x7F200000;
     LoadImage(&rect, &thedata);*/
-    FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );
+    //FntOpen(MARGINX, SCREENYRES - MARGINY - FONTSIZE, SCREENXRES - MARGINX * 2, FONTSIZE, 0, 280 );
 
     // load the font from bios
     decompressfont();
+    const uint16_t tpage = getTPage(0, 0, FONT_X, 0);
+
+    // load some cluts
     RECT currentrect;
     setRECT(&currentrect, CLUT_X, CLUT_Y, 16, 1);
     static const uint16_t PALETTE[16] = { 0x0000, 0x0842, 0x1084, 0x18C6, 0x2108, 0x294A, 0x318C, 0x39CE, 0x4631, 0x4E73, 0x56B5, 0x5EF7, 0x6739, 0x6F7B, 0x77BD, 0x7FFF };
     LoadImage(&currentrect, (u_long*)&PALETTE);
-    const uint16_t tpage = getTPage(0, 0, FONT_X, 0);
-    setDrawTPage(&fonttpage[0], 0, 0, tpage);
-    setDrawTPage(&fonttpage[1], 0, 0, tpage);
 
-    setTile(&menu_selected[0]);
-    setRGB0(&menu_selected[0], 0, 0, 0);
-    setTile(&menu_selected[1]);
-    setRGB0(&menu_selected[1], 0, 0, 0);
+    RECT duprect;
+    setRECT(&duprect, CLUT2_X, CLUT2_Y, 16, 1);
+    static const uint16_t PALETTE2[16] = { 0x0000, 0x0842, 0x1084, 0x18C6, 0x2108, 0x294A, 0x318C, 0x39CE, 0x4631, 0x4E73, 0x56B5, 0x5EF7, 0x6739, 0x6F7B, 0x77BD, 0x0001 };
+    LoadImage(&duprect, (u_long*)&PALETTE2);
 
-    //  top
-    setTile(&dataframe[0]);
-    setXY0(&dataframe[0], STARTX, STARTY);
-    setWH(&dataframe[0], PIXW, BLOCKSIZE);
-    setRGB0(&dataframe[0], 0, 0, 0);
-
-    // bottom
-    setTile(&dataframe[1]);
-    setXY0(&dataframe[1], STARTX, ENDY-BLOCKSIZE);
-    setWH(&dataframe[1], PIXW, BLOCKSIZE);
-    setRGB0(&dataframe[1], 0, 0, 0);
-
-    // left
-    setTile(&dataframe[2]);
-    setXY0(&dataframe[2], STARTX, STARTY+BLOCKSIZE);
-    setWH(&dataframe[2], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
-    setRGB0(&dataframe[2], 0, 0, 0);
-
-    // right
-    setTile(&dataframe[3]);
-    setXY0(&dataframe[3], ENDX-BLOCKSIZE, STARTY+BLOCKSIZE);
-    setWH(&dataframe[3], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
-    setRGB0(&dataframe[3], 0, 0, 0);
-
-    // setup tiles
+    // set default clut
+    current_font_clut[0] = CLUT_X;
+    current_font_clut[1] = CLUT_Y;    
+    
     for(int i = 0; i < 2; i++)
     {
+        setRGB0(&fb[i].draw, 50, 50, 50);
+        fb[i].draw.isbg = 1;
+
+        // set font tpage
+        setDrawTPage(&fb[i].fonttpage, 0, 0, tpage); 
+
+        // setup menu
+        setTile(&fb[i].menu_selected);
+        setRGB0(&fb[i].menu_selected, 0, 0, 0);
+
+        // setup dataframe
+        //  top
+        setTile(&fb[i].dataframe[0]);
+        setXY0(&fb[i].dataframe[0], STARTX, STARTY);
+        setWH(&fb[i].dataframe[0], PIXW, BLOCKSIZE);
+        setRGB0(&fb[i].dataframe[0], 0, 0, 0);
+    
+        // bottom
+        setTile(&fb[i].dataframe[1]);
+        setXY0(&fb[i].dataframe[1], STARTX, ENDY-BLOCKSIZE);
+        setWH(&fb[i].dataframe[1], PIXW, BLOCKSIZE);
+        setRGB0(&fb[i].dataframe[1], 0, 0, 0);
+    
+        // left
+        setTile(&fb[i].dataframe[2]);
+        setXY0(&fb[i].dataframe[2], STARTX, STARTY+BLOCKSIZE);
+        setWH(&fb[i].dataframe[2], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
+        setRGB0(&fb[i].dataframe[2], 0, 0, 0);
+    
+        // right
+        setTile(&fb[i].dataframe[3]);
+        setXY0(&fb[i].dataframe[3], ENDX-BLOCKSIZE, STARTY+BLOCKSIZE);
+        setWH(&fb[i].dataframe[3], BLOCKSIZE, PIXH-(2*BLOCKSIZE));
+        setRGB0(&fb[i].dataframe[3], 0, 0, 0);
+
+        // setup tiles
         int x = USTARTX;
         int y = USTARTY;
         for(int j = 0; j < UCNT; j++)
         {
-            setTile(&datablocks[i][j]);
-            setXY0(&datablocks[i][j], x, y);
-            setWH(&datablocks[i][j], BLOCKSIZE, BLOCKSIZE);
-            setRGB0(&datablocks[i][j], 255, 255, 255);
+            setTile(&fb[i].datablocks[j]);
+            setXY0(&fb[i].datablocks[j], x, y);
+            setWH(&fb[i].datablocks[j], BLOCKSIZE, BLOCKSIZE);
+            setRGB0(&fb[i].datablocks[j], 255, 255, 255);
             x += BLOCKSIZE;
             if(x == UENDX)
             {
                 x = USTARTX;
                 y += BLOCKSIZE;
             }
-        }
-    }    
+        }        
+    }
+
+    SetDispMask(1);
+    PutDispEnv(&CURRENT.disp);
+    PutDrawEnv(&CURRENT.draw);    
 }
 
 u_char padbuff[2][34];
@@ -395,11 +393,11 @@ void set_byte(uint8_t value, int pos)
     for(uint8_t bit = 0; bit < 8; bit++) {        
         if((value >> bit) & 1)
         {
-            setRGB0(&datablocks[db][pos], 0, 0, 0);
+            setRGB0(&CURRENT.datablocks[pos], 0, 0, 0);
         }
         else
         {
-            setRGB0(&datablocks[db][pos], 255, 255, 255);
+            setRGB0(&CURRENT.datablocks[pos], 255, 255, 255);
         }
         pos++;       
     }
@@ -598,9 +596,9 @@ void menu_draw(void)
         print_text_at(menu->items[i].label, x, y, true);
         if(i == menu->index)
         {
-            setXY0(&menu_selected[db], 0, y-2);
-            setWH(&menu_selected[db], SCREENXRES, 20);
-            addPrim(ot[db], &menu_selected[db]);
+            setXY0(&CURRENT.menu_selected, 0, y-2);
+            setWH(&CURRENT.menu_selected, SCREENXRES, 20);
+            addPrim(CURRENT.ot, &CURRENT.menu_selected);
         }
         y += 20;
     }
@@ -610,9 +608,9 @@ void menu_draw(void)
         print_text_at(menu->items[i].label, x, y, true);
         if(i == menu->index)
         {
-            setXY0(&menu_selected[db], 0, y-2);
-            setWH(&menu_selected[db], SCREENXRES, 20);
-            addPrim(ot[db], &menu_selected[db]);
+            setXY0(&CURRENT.menu_selected, 0, y-2);
+            setWH(&CURRENT.menu_selected, SCREENXRES, 20);
+            addPrim(CURRENT.ot, &CURRENT.menu_selected);
         }
         y += 20;
     }*/
@@ -790,14 +788,14 @@ void dump_draw(void)
     }
 
     // draw a frame of data    
-    addPrim(ot[db], &dataframe[0]);
-    addPrim(ot[db], &dataframe[1]);
-    addPrim(ot[db], &dataframe[2]);
-    addPrim(ot[db], &dataframe[3]);
+    addPrim(CURRENT.ot, &CURRENT.dataframe[0]);
+    addPrim(CURRENT.ot, &CURRENT.dataframe[1]);
+    addPrim(CURRENT.ot, &CURRENT.dataframe[2]);
+    addPrim(CURRENT.ot, &CURRENT.dataframe[3]);
 
     for(int j = 0; j < UCNT; j++)
     {
-        addPrim(ot[db], &datablocks[db][j]);
+        addPrim(CURRENT.ot, &CURRENT.datablocks[j]);
     }
 }
 
@@ -810,8 +808,11 @@ void dump_start(DUMP *dump, uint16_t fullframecnt)
     dump->startdata[2] = lastframeindex;
     dump->startdata[3] = lastframeindex >> 8;
 
-    setRGB0(&draw[0], 255, 255, 255);
-    setRGB0(&draw[1], 255, 255, 255);
+    setRGB0(&fb[0].draw, 255, 255, 255);
+    setRGB0(&fb[1].draw, 255, 255, 255);
+    current_font_clut[0] = CLUT2_X;
+    current_font_clut[1] = CLUT2_Y;
+
     sp.page_dump.draw = &dump_draw;
     sp.page_dump.on_vsync = &dump_frame;
     dump_encode_frame(dump, dump->name, strlen(dump->name));
@@ -822,8 +823,10 @@ void dump_start(DUMP *dump, uint16_t fullframecnt)
 
 void dump_exit(void)
 {
-    setRGB0(&draw[0], 50, 50, 50);
-    setRGB0(&draw[1], 50, 50, 50);
+    current_font_clut[0] = CLUT_X;
+    current_font_clut[1] = CLUT_Y;
+    setRGB0(&fb[0].draw, 50, 50, 50);
+    setRGB0(&fb[1].draw, 50, 50, 50);
     sp_exit();
 }
 
@@ -1141,17 +1144,17 @@ int main(void)
     
     while(1)
     {   
-        fontSPRT = &font[db][0];    
-        ClearOTagR(ot[db], OTLEN);
+        fontSPRT = &CURRENT.font[0];    
+        ClearOTagR(CURRENT.ot, OTLEN);
         sp.curpage->on_vsync();
         sp.curpage->draw();
-        addPrim(ot[db], &fonttpage[db]);
+        addPrim(CURRENT.ot, &CURRENT.fonttpage);
         lastpad = *(PADTYPE*)padbuff[0];
         DrawSync(0);
         VSync(0);         
-        PutDispEnv(&disp[db]);
-        PutDrawEnv(&draw[db]);
-        DrawOTag(ot[db] + OTLEN - 1);
+        PutDispEnv(&CURRENT.disp);
+        PutDrawEnv(&CURRENT.draw);
+        DrawOTag(CURRENT.ot + OTLEN - 1);
         db = !db;        
     }
 
