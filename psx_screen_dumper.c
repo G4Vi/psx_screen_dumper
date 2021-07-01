@@ -24,8 +24,7 @@ SOFTWARE.
 
 */
 
-//#include <sys/types.h>
-//#include <stdio.h>
+#define PSX_SCREEN_DUMPER_VERSION "v0.10"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -1082,7 +1081,7 @@ int main(void)
     sp.page_select_device.back = NULL;
     sp.page_select_device.exit = &menu_exit;
     sp.page_select_device.menu.handle = &select_device_handle;
-    strcpy(sp.page_select_device.menu.title, "PSX Screen Dumper");
+    strcpy(sp.page_select_device.menu.title, "PSX Screen Dumper " PSX_SCREEN_DUMPER_VERSION);
 
     menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc0 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
         .changeto = &sp.page_mcs_list,

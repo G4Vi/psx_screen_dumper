@@ -5,6 +5,8 @@ Dump data from a psx (Sony PlayStation) through the screen
 
 See [screen_data_reader](https://github.com/G4Vi/screen_data_reader/) for the reader.
 
+[Demo video](https://www.youtube.com/watch?v=dxf2u5wmo0I)
+
 ## Requirements
 * NTSC PlayStation and ability to capture cleanish video from it. The video must have the correct aspect ratio and decent lighting. A phone camera with focus lock on a flatscreen TV or a capture card can work. A CRT probably won't work. Otherwise it can be tested with an emulator.
 
@@ -43,6 +45,10 @@ MIT, see `LICENSE`.
 
 
 BIOS charset usage and crc32 adapted from [tonyhax](https://github.com/socram8888/tonyhax/).
+
+## Help
+
+Feel free to ask in the [PSXDEV discord](https://discord.gg/QByKPpH) 
 
 ### Wishlist
 - PAL support
