@@ -3,10 +3,10 @@ TYPE = ps-exe
 
 SRCS = psx_screen_dumper.c \
 crc.c \
-../common/crt0/crt0.s \
+thirdparty/nugget/common/crt0/crt0.s \
 
-CPPFLAGS += -I../psyq/include
-LDFLAGS += -L../psyq/lib
+CPPFLAGS += -Ithirdparty/nugget/psyq/include
+LDFLAGS += -Lthirdparty/nugget/psyq/lib
 LDFLAGS += -Wl,--start-group
 LDFLAGS += -lapi
 LDFLAGS += -lc
@@ -31,7 +31,7 @@ LDFLAGS += -lspu
 LDFLAGS += -ltap
 LDFLAGS += -Wl,--end-group
 
-include ../common.mk
+include thirdparty/nugget/common.mk
 
 # extension must be .exe for no$psx
 $(BINDIR)$(TARGET).exe: $(BINDIR)$(TARGET).ps-exe
