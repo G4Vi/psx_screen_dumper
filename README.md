@@ -48,7 +48,35 @@ BIOS charset usage and crc32 adapted from [tonyhax](https://github.com/socram888
 
 ## Help
 
-Feel free to ask in the [PSXDEV discord](https://discord.gg/QByKPpH) 
+Feel free to ask in the [PSXDEV discord](https://discord.gg/QByKPpH)
+
+## Building (Linux)
+
+Install the MIPS toolchain
+
+`sudo apt-get install gcc-mipsel-linux-gnu g++-mipsel-linux-gnu binutils-mipsel-linux-gnu`
+
+Download the nugget submodule
+
+`cd thirdparty/nugget && git submodule init && git submodule update`
+
+Install the converted PsyQ 4.7 libs. Currently SHA1 `36E7A1D606568363F1EBE67E1B499E61FA48DE00`
+
+`wget http://psx.arthus.net/sdk/Psy-Q/psyq-4.7-converted-full.7z`
+
+`7z x -o./thirdparty/nugget/psyq/ psyq-4.7-converted-full.7z`
+
+`make` builds a `.ps-exe`
+
+`make iso` builds an iso
+
+`make nocash` builds a `.ps-exe` with `.exe` extension instead for loading in `no$psx`
+
+`make actualclean` cleans
+
+### Thanks
+
+ Nicolas Noble for build environment. ABelliqueux for easy PSYQ setup tutorial. Many others in the PSXDEV discord.
 
 ### Wishlist
 - PAL support
