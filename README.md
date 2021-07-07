@@ -58,7 +58,7 @@ Install the MIPS toolchain
 
 Download the nugget submodule
 
-`cd thirdparty/nugget && git submodule init && git submodule update`
+`cd thirdparty/nugget && git submodule init && git submodule update && cd ../../`
 
 Install the converted PsyQ 4.7 libs. Currently SHA1 `36E7A1D606568363F1EBE67E1B499E61FA48DE00`
 
