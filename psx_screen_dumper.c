@@ -24,7 +24,7 @@ SOFTWARE.
 
 */
 
-#define PSX_SCREEN_DUMPER_VERSION "v0.11.0"
+#define PSX_SCREEN_DUMPER_VERSION "v0.11.1"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>

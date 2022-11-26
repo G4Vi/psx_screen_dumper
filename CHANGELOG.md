@@ -1,4 +1,4 @@
-## [0.11.0](https://github.com/G4Vi/MHFS/compare/v0.10.0...v0.11.0) - 2022-11-26
+## [0.11.1](https://github.com/G4Vi/psx_screen_dumper/compare/v0.10.0...v0.11.1) - 2022-11-26
 ### Added
 - CHANGELOG.md
 - `make release`
