@@ -435,7 +435,7 @@ typedef struct {
 } SELECT_DEVICE_ITEM_EXTRADATA;
 
 typedef struct {
-    char label[20];
+    char label[21];
     union {
         SELECT_DEVICE_ITEM_EXTRADATA selectdevice;
         MCS_LIST_ITEM_EXTRADATA mcslist;
@@ -480,7 +480,7 @@ typedef struct {
     
     // used only for file read dump
     int fd;    
-    char filename[25];
+    char filename[26];
     
 } DUMP;
 
@@ -977,9 +977,11 @@ void mcs_list_load(void)
     }
     int i = 0;
     do {
-        file.name[19] = '\0';
-        printf("file %s size %u\n", file.name, file.size);
-        menu_mcs_list_add_item(&sp.page_mcs_list.menu, file.name, &(MCS_LIST_ITEM_EXTRADATA) {
+        char nullterminatedname[21];
+        memcpy(nullterminatedname, file.name, 20);
+        nullterminatedname[20] = '\0';
+        printf("file %s size %u\n", nullterminatedname, file.size);
+        menu_mcs_list_add_item(&sp.page_mcs_list.menu, nullterminatedname, &(MCS_LIST_ITEM_EXTRADATA) {
             .devnumber = sp.page_mcs_list.menu.mde.devnumber,
             .filesize = file.size
         });
