@@ -24,14 +24,13 @@ SOFTWARE.
 
 */
 
-#define PSX_SCREEN_DUMPER_VERSION "v0.11.1"
+#define PSX_SCREEN_DUMPER_VERSION "v0.11.2"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 size_t strlcpy(char *d, const char *s, size_t n);
-size_t strlcat(char *dst, const char *src, size_t dsize);
 
 #define max(a,b) \
        ({ typeof (a) _a = (a); \
@@ -413,11 +412,8 @@ typedef enum {
     SPT_CREDITS
 } SCREEN_PAGE_TYPE;
 
-typedef struct {
-    const char *devnumber;
-    const char *filename;
-    size_t filesize;    
-} MCS_LIST_ITEM_EXTRADATA;
+typedef char DEVICE_FILENAME[sizeof("bu00:")];
+typedef char MCS_LIST_TITLE[sizeof("Dump mc0 saves")];
 
 typedef struct SCREEN_PAGE SCREEN_PAGE;
 typedef struct {
@@ -425,26 +421,30 @@ typedef struct {
     union {
         // mcs list extradata
         struct {
-            const char *devnumber;
-            const char *title;
+            DEVICE_FILENAME devname;
+            MCS_LIST_TITLE title;
         };
         // dump buf extradata
         struct {
             const uint8_t *buf;
-            const size_t bufsize;
+            size_t bufsize;
         };
     };
     
 } SELECT_DEVICE_ITEM_EXTRADATA;
 
-#define MAX_SAVE_FILENAME ST_MEMBER_SIZE(struct DIRENTRY, name) // Does NOT include terminating 0
-_Static_assert(MAX_SAVE_FILENAME == 20, "Confused about save filename lengths");
-typedef char SAVE_FILENAME[MAX_SAVE_FILENAME+1];
-typedef char UNSAFE_SAVE_FILENAME[MAX_SAVE_FILENAME];
-#define MAX_DEVNAME 5 // bu00: // Does NOT include terminating 0
+typedef char UNSAFE_SAVE_FILENAME[ST_MEMBER_SIZE(struct DIRENTRY, name)];
+_Static_assert(sizeof(UNSAFE_SAVE_FILENAME) == 20, "Confused about save filename lengths");
+typedef char SAVE_FILENAME[sizeof(UNSAFE_SAVE_FILENAME)+1];
 
 typedef struct {
-    char label[MAX_SAVE_FILENAME+1];
+    DEVICE_FILENAME devname;
+    const SAVE_FILENAME *filename;
+    size_t filesize;
+} MCS_LIST_ITEM_EXTRADATA;
+
+typedef struct {
+    char label[sizeof(SAVE_FILENAME)];
     union {
         SELECT_DEVICE_ITEM_EXTRADATA selectdevice;
         MCS_LIST_ITEM_EXTRADATA mcslist;
@@ -453,7 +453,7 @@ typedef struct {
 _Static_assert(ST_MEMBER_SIZE(MENUITEM, label) >= sizeof(SAVE_FILENAME), "too small for save filenames");
 
 typedef struct {
-    const char *devnumber;
+    DEVICE_FILENAME devname;
 } MENU_DIRECTORY_EXTRADATA;
 
 typedef struct {
@@ -490,7 +490,7 @@ typedef struct {
     
     // used only for file read dump
     int fd;    
-    char filename[MAX_DEVNAME+MAX_SAVE_FILENAME+1];
+    char filepath[sizeof(DEVICE_FILENAME)+sizeof(SAVE_FILENAME)-1];
 } DUMP;
 
 typedef struct SCREEN_PAGE{
@@ -555,20 +555,33 @@ static inline MENUITEM *menu_add_item(MENU *menu, const char *label)
     return &menu->items[menu->count++];
 }
 
-static inline void menu_select_device_add_item(MENU *menu, const char *label, const SELECT_DEVICE_ITEM_EXTRADATA *extradata)
+static inline MENUITEM *menu_select_device_add_item(MENU *menu, const char *label, SCREEN_PAGE *changeto)
 {
-    memcpy(&(menu_add_item(menu, label))->selectdevice, extradata, sizeof(*extradata));
+    MENUITEM *newitem = menu_add_item(menu, label);
+    newitem->selectdevice.changeto = changeto;
+    return newitem;
 }
 
-static inline void menu_mcs_list_add_item(MENU *menu, const UNSAFE_SAVE_FILENAME *unsafename, const MCS_LIST_ITEM_EXTRADATA *extradata)
+static inline void menu_select_device_add_mcs_list_item(MENU *menu, MCS_LIST_TITLE *title, SCREEN_PAGE *changeto, DEVICE_FILENAME *devname)
+{
+    MENUITEM *item = menu_select_device_add_item(menu, *title, changeto);
+    _Static_assert(sizeof(item->selectdevice.devname) >= sizeof(*devname), "too small");
+    memcpy(item->selectdevice.devname, devname, sizeof(*devname));
+    _Static_assert(sizeof(item->selectdevice.title) >= sizeof(*title), "too small");
+    memcpy(item->selectdevice.title, title, sizeof(*title));
+}
+
+static inline void menu_mcs_list_add_item(MENU *menu, const struct DIRENTRY *file)
 {
     SAVE_FILENAME nullterminatedname;
-    memcpy(nullterminatedname, unsafename, sizeof(*unsafename));
+    memcpy(nullterminatedname, file->name, sizeof(file->name));
     nullterminatedname[sizeof(nullterminatedname)-1] = '\0';
-    printf("file %s size %u\n", nullterminatedname, extradata->filesize);
+    printf("file %s size %u\n", nullterminatedname, file->size);
     MENUITEM *item = menu_add_item(menu, nullterminatedname);
-    memcpy(&item->mcslist, extradata, sizeof(*extradata));
-    item->mcslist.filename = item->label;
+    _Static_assert(sizeof(item->mcslist.devname) >= sizeof(sp.page_mcs_list.menu.mde.devname), "too small");
+    memcpy(item->mcslist.devname, sp.page_mcs_list.menu.mde.devname, sizeof(sp.page_mcs_list.menu.mde.devname));
+    item->mcslist.filesize = file->size;
+    item->mcslist.filename = &item->label;
 }
 
 void menu_draw(void)
@@ -913,7 +926,7 @@ void dump_file_exit(void)
 void dump_file_open(void)
 {
     DUMP *dump = &sp.page_dump.dump;    
-    dump->fd = open(dump->filename, 0x1);
+    dump->fd = open(dump->filepath, 0x1);
     if(dump->fd < 0) {
         printf("Failed to open file\n");
         sp.page_dump.exit();
@@ -927,10 +940,12 @@ void dump_file_open(void)
 void dump_file_init(const void *param) {
     const MCS_LIST_ITEM_EXTRADATA *ed = param;
     sp_init_page(&sp.page_dump);
-    strlcpy(sp.page_dump.dump.filename, ed->devnumber, sizeof(sp.page_dump.dump.filename));
-    strlcat(sp.page_dump.dump.filename, ed->filename, sizeof(sp.page_dump.dump.filename));
+    _Static_assert(sizeof(sp.page_dump.dump.filepath) >= (sizeof(ed->devname) + sizeof(*ed->filename) - 1), "too small");
+    memcpy(sp.page_dump.dump.filepath, ed->devname, sizeof(ed->devname));
+    strcat(sp.page_dump.dump.filepath, *ed->filename);
     sp.page_dump.dump.read_bytes_left = ed->filesize;
-    strlcpy(sp.page_dump.dump.name, ed->filename, sizeof(sp.page_dump.dump.name));
+    _Static_assert(sizeof(sp.page_dump.dump.name) >= sizeof(*ed->filename), "too small");
+    memcpy(sp.page_dump.dump.name, ed->filename, sizeof(*ed->filename));
     dump_init();
     sp.page_dump.on_vsync = &dump_file_open;
     sp.page_dump.dump.statustext = "Opening file";     
@@ -983,16 +998,12 @@ void mcs_list_load(void)
     _bu_init();
 
     struct DIRENTRY file;
-    char tosearch[MAX_DEVNAME+1+1]; // devicename, *, and terminating 0
-    const size_t devnumlen = strlen(sp.page_mcs_list.menu.mde.devnumber);
-    if((devnumlen + 1) >= sizeof(tosearch))
-    {
-        sp.page_mcs_list.menu.status = "failed to build search string";
-        return;
-    }
-    memcpy(tosearch, sp.page_mcs_list.menu.mde.devnumber, devnumlen);
-    tosearch[devnumlen] = '*';
-    tosearch[devnumlen+1] = '\0';
+    char tosearch[sizeof(DEVICE_FILENAME)+1]; // null terminated devicename and '*'
+    _Static_assert(sizeof(tosearch) >= (sizeof(sp.page_mcs_list.menu.mde.devname) + 1), "too small");
+    memcpy(tosearch, sp.page_mcs_list.menu.mde.devname, sizeof(sp.page_mcs_list.menu.mde.devname)-1);
+    const size_t devnamelen = strlen(sp.page_mcs_list.menu.mde.devname);
+    tosearch[devnamelen] = '*';
+    tosearch[devnamelen+1] = '\0';
     printf("tosearch %s\n", tosearch);
     if(firstfile(tosearch, &file) == NULL)
     {        
@@ -1001,19 +1012,9 @@ void mcs_list_load(void)
     }
     int i = 0;
     do {
-        menu_mcs_list_add_item(&sp.page_mcs_list.menu, &file.name, &(MCS_LIST_ITEM_EXTRADATA) {
-            .devnumber = sp.page_mcs_list.menu.mde.devnumber,
-            .filesize = file.size
-        });
+        menu_mcs_list_add_item(&sp.page_mcs_list.menu, &file);
         i++;
     } while(nextfile(&file) != NULL);
-
-    /*for(; i < 15; i++) {
-        menu_mcs_list_add_item(&sp.page_mcs_list.menu, "dummy", &(MCS_LIST_ITEM_EXTRADATA) {
-            .devnumber = sp.page_mcs_list.menu.mde.devnumber,
-            .filesize = file.size
-        });
-    }*/
 
     if(i == 0) {
         sp.page_mcs_list.menu.status = "No save files found!";
@@ -1037,8 +1038,10 @@ void mcs_list_init(const void *param)
 {
     const SELECT_DEVICE_ITEM_EXTRADATA *sditem = param;
     sp_init_page(&sp.page_mcs_list);
-    sp.page_mcs_list.menu.mde.devnumber = sditem->devnumber;
-    strlcpy(sp.page_mcs_list.menu.title, sditem->title, sizeof(sp.page_mcs_list.menu.title));
+    _Static_assert(sizeof(sp.page_mcs_list.menu.mde.devname) >= sizeof(sditem->devname), "too small");
+    memcpy(sp.page_mcs_list.menu.mde.devname, sditem->devname, sizeof(sditem->devname));
+    _Static_assert(sizeof(sp.page_mcs_list.menu.title) >= sizeof(sditem->title), "too small");
+    memcpy(sp.page_mcs_list.menu.title, sditem->title, sizeof(sditem->title));
     sp.page_mcs_list.menu.status = "Reading MC files";    
     menu_init();
     sp.page_mcs_list.on_vsync = &mcs_list_preload;
@@ -1107,31 +1110,17 @@ int main(void)
     _Static_assert(sizeof(sp.page_select_device.menu.title) >= sizeof(title), "bad length");
     memcpy(sp.page_select_device.menu.title, title, sizeof(title));
 
-    menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc0 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = &sp.page_mcs_list,
-        .devnumber = "bu00:",
-        .title = "Dump mc0 saves"
-    });
+    menu_select_device_add_mcs_list_item(&sp.page_select_device.menu, &"Dump mc0 saves", &sp.page_mcs_list, &"bu00:");
 
-    menu_select_device_add_item(&sp.page_select_device.menu, "Dump mc1 saves", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = &sp.page_mcs_list,
-        .devnumber = "bu10:",
-        .title = "Dump mc1 saves"
-    });
+    menu_select_device_add_mcs_list_item(&sp.page_select_device.menu, &"Dump mc1 saves", &sp.page_mcs_list, &"bu10:");
 
-    menu_select_device_add_item(&sp.page_select_device.menu, "Dump bios", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = &sp.page_dump,
-        .buf = (const uint8_t*)0xBFC00000,
-        .bufsize = 0x80000
-    });
+    MENUITEM *biositem = menu_select_device_add_item(&sp.page_select_device.menu, "Dump bios", &sp.page_dump);
+    biositem->selectdevice.buf = (const uint8_t*)0xBFC00000;
+    biositem->selectdevice.bufsize = 0x80000;
 
-    menu_select_device_add_item(&sp.page_select_device.menu, "test font", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = &sp.page_dbg_font
-    });
+    menu_select_device_add_item(&sp.page_select_device.menu, "test font", &sp.page_dbg_font);
 
-    menu_select_device_add_item(&sp.page_select_device.menu, "Credits", &(SELECT_DEVICE_ITEM_EXTRADATA){
-        .changeto = &sp.page_credits
-    });   
+    menu_select_device_add_item(&sp.page_select_device.menu, "Credits", &sp.page_credits);
 
     sp.page_mcs_list.current = SPT_MCS_LIST;
     sp.page_mcs_list.init = &mcs_list_init;
@@ -1220,58 +1209,4 @@ size_t strlcpy(char *d, const char *s, size_t n) {
     d[actual] = '\0';
   }
   return slen;
-}
-
-/*
-╞══════════════════════════════════════════════════════════════════════════════╡
-│ Copyright (c) 1998, 2015 Todd C. Miller <millert@openbsd.org>                │
-│                                                                              │
-│ Permission to use, copy, modify, and/or distribute this software for         │
-│ any purpose with or without fee is hereby granted, provided that the         │
-│ above copyright notice and this permission notice appear in all copies.      │
-│                                                                              │
-│ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL                │
-│ WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED                │
-│ WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE             │
-│ AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL         │
-│ DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR        │
-│ PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER               │
-│ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR             │
-│ PERFORMANCE OF THIS SOFTWARE.                                                │
-╚─────────────────────────────────────────────────────────────────────────────*/
-/**
- * Appends string, the BSD way.
- * 
- * Appends `src` to string `dst` of size `dsize` (unlike strncat,
- * `dsize` is the full size of `dst`, not space left). At most `dsize-1`
- * characters will be copied. Always NUL terminates (unless `dsize <=
- * strlen(dst)`). Returns `strlen(src) + MIN(dsize, strlen(initial
- * dst))`. If `retval >= dsize`, truncation occurred.
- */
-size_t
-strlcat(char *dst, const char *src, size_t dsize)
-{
-	const char *odst = dst;
-	const char *osrc = src;
-	size_t n = dsize;
-	size_t dlen;
-
-	/* Find the end of dst and adjust bytes left but don't go past end. */
-	while (n-- != 0 && *dst != '\0')
-		dst++;
-	dlen = dst - odst;
-	n = dsize - dlen;
-
-	if (n-- == 0)
-		return(dlen + strlen(src));
-	while (*src != '\0') {
-		if (n != 0) {
-			*dst++ = *src;
-			n--;
-		}
-		src++;
-	}
-	*dst = '\0';
-
-	return(dlen + (src - osrc));	/* count does not include NUL */
 }

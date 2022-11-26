@@ -1,3 +1,7 @@
+## [0.11.2](https://github.com/G4Vi/psx_screen_dumper/compare/v0.11.1...v0.11.2) - 2022-11-26
+### Changed
+- Optimized string handling to use memcpy when possible, reduced pointer chasing
+
 ## [0.11.1](https://github.com/G4Vi/psx_screen_dumper/compare/v0.10.0...v0.11.1) - 2022-11-26
 ### Added
 - CHANGELOG.md
