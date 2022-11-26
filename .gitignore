@@ -11,3 +11,5 @@ cmake-build-*/
 *.dep
 *.o
 *.objdump.txt
+psx_screen_dumper.iso
+psx_screen_dumper_v*

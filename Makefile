@@ -50,5 +50,16 @@ iso: $(BINDIR)$(TARGET).iso
 actualclean: clean
 	rm -f $(BINDIR)$(TARGET).iso
 	rm -f $(BINDIR)$(TARGET).objdump.txt
-	
-.PHONY: nocash iso actualclean
+
+PSX_SCREEN_DUMPER_VERSION := $(shell perl -ne 'print $$1 if($$_ =~ /PSX_SCREEN_DUMPER_VERSION\s"(v[^"]+)"/)' psx_screen_dumper.c)
+
+release: $(BINDIR)$(TARGET).ps-exe $(BINDIR)$(TARGET).iso README.md CHANGELOG.md LICENSE
+	mkdir psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)
+	cp $(BINDIR)$(TARGET).ps-exe psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)/
+	cp $(BINDIR)$(TARGET).iso psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)/
+	cp README.md psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)/
+	cp CHANGELOG.md psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)/
+	cp LICENSE psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)/
+	zip -r psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION).zip psx_screen_dumper_$(PSX_SCREEN_DUMPER_VERSION)
+
+.PHONY: nocash iso actualclean release
