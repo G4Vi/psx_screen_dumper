@@ -50,6 +50,8 @@ size_t strlcpy(char *d, const char *s, size_t n);
 #include <libapi.h>
 
 #include "crc.h"
+#include "thirdparty/QRCode/src/qrcode.h"
+#define PSD_USE_QRCODE
 
 #define SCREENXRES 320
 #define SCREENYRES 240
@@ -83,7 +85,11 @@ size_t strlcpy(char *d, const char *s, size_t n);
 
 
 // DO NOT CHANGE DIRECTLY
+#ifndef PSD_USE_QRCODE
 #define PIXW (((MAXENDX-STARTX)/BLOCKSIZE)*BLOCKSIZE)
+#else
+#define PIXW (((MAXENDY-STARTY) / BLOCKSIZE)*BLOCKSIZE)
+#endif
 #define PIXH (((MAXENDY-STARTY) / BLOCKSIZE)*BLOCKSIZE)
 #define ENDX (STARTX + PIXW)
 #define ENDY (STARTY + PIXH)
@@ -98,7 +104,11 @@ size_t strlcpy(char *d, const char *s, size_t n);
 
 #define FRAME_HEADER_SIZE (sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t))
 #define FRAME_FOOTER_SIZE (sizeof(uint32_t))
+#ifndef PSD_USE_QRCODE
 #define FRAME_DATA_SIZE   ((UCNT/8) - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
+#else
+#define FRAME_DATA_SIZE (84 - (FRAME_HEADER_SIZE + FRAME_FOOTER_SIZE))
+#endif
 // END DO NOT CHANGE DIRECTLY
    
 #define FRAME_OTLEN 4 // 4 sides
@@ -226,6 +236,7 @@ void print_text_at(const char *text, int16_t x, int16_t y, bool overstrike)
 
 void init(void)
 {
+    printf("UCNT %u UCNTW %u UCNTH %u bytes %u\n", UCNT, UCNTW, UCNTH, UCNT/8);
     ResetGraph(0);
     
     SetDefDispEnv(&fb[0].disp, 0, 0, SCREENXRES, SCREENYRES);
@@ -491,6 +502,10 @@ typedef struct {
     // used only for file read dump
     int fd;    
     char filepath[sizeof(DEVICE_FILENAME)+sizeof(SAVE_FILENAME)-1];
+
+    // 49x49 qrcode (v8)
+    QRCode qrcode;
+    uint8_t qrcodeData[301];
 } DUMP;
 
 typedef struct SCREEN_PAGE{
@@ -721,7 +736,31 @@ void dump_encode_frame(DUMP *dump, const uint8_t *framebuf, const const uint16_t
     dump->enddata[2] = (uint8_t)(checksum >> 16);
     dump->enddata[3] = (uint8_t)(checksum >> 24);
     
+    #ifndef PSD_USE_QRCODE
     dump->printhead = framebuf;
+    #else
+    printf("encoding qr, framesize %u crc %X %X %X %X\n", framesize, dump->enddata[0], dump->enddata[1], dump->enddata[2], dump->enddata[3]);
+    //qrcode_initBytes(&dump->qrcode, dump->qrcodeData, 8, ECC_HIGH, "HELLO WORLDHELLO WORLDHELLO WORLDHELLO WORLDHELLO WORLDHELLO WORLDHELLO WORLDHELLO H", 84);
+    static uint8_t indata[84];
+    indata[0] = dump->startdata[0];
+    indata[1] = dump->startdata[1];
+    indata[2] = dump->startdata[2];
+    indata[3] = dump->startdata[3];
+    indata[4] = dump->startdata[4];
+    indata[5] = dump->startdata[5];
+    memcpy(&indata[6], framebuf, 74);
+    indata[80] = dump->enddata[0];
+    indata[81] = dump->enddata[1];
+    indata[82] = dump->enddata[2];
+    indata[83] = dump->enddata[3];
+    for(int i = 0; i < 84; i++)
+    {
+        printf("i is %d %X\n", i, indata[i]);
+    }
+    printf("bufsize %u\n", qrcode_getBufferSize(8));
+    qrcode_initBytes(&dump->qrcode, dump->qrcodeData, 8, ECC_HIGH, indata, 84);
+    dump->printhead = dump->qrcodeData;
+    #endif
     dump->sleep_frames = 10;
     dump->frameindex++;    
 }
@@ -794,6 +833,8 @@ void dump_draw(void)
 
     // calculate the blocks
     int bitindex = 0;
+
+    #ifndef PSD_USE_QRCODE
     // start data
     for(int i = 0; i < 6; i++)
     {
@@ -811,12 +852,31 @@ void dump_draw(void)
         set_byte(dump->enddata[i], bitindex);
         bitindex += 8;
     }
+    #else
+    for(int y = 0; y < 49; y++)
+    {
+        for(int x = 0; x < 49; x++)
+        {
+            if(qrcode_getModule(&dump->qrcode, x, y))
+            {
+                setRGB0(&CURRENT.datablocks[bitindex], 0, 0, 0);
+            }
+            else
+            {
+                setRGB0(&CURRENT.datablocks[bitindex], 255, 255, 255);
+            }
+            bitindex++;
+        }
+    }
+    #endif
 
+    #ifndef PSD_USE_QRCODE
     // draw a frame of data    
     addPrim(CURRENT.ot, &CURRENT.dataframe[0]);
     addPrim(CURRENT.ot, &CURRENT.dataframe[1]);
     addPrim(CURRENT.ot, &CURRENT.dataframe[2]);
     addPrim(CURRENT.ot, &CURRENT.dataframe[3]);
+    #endif
 
     for(int j = 0; j < UCNT; j++)
     {

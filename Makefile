@@ -3,6 +3,7 @@ TYPE = ps-exe
 
 SRCS = psx_screen_dumper.c \
 crc.c \
+thirdparty/QRCode/src/qrcode.c \
 thirdparty/nugget/common/crt0/crt0.s \
 
 CPPFLAGS += -Ithirdparty/nugget/psyq/include
